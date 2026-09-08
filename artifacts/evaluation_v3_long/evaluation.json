@@ -1,0 +1,39 @@
+{
+  "evaluation_records": 6780,
+  "parameters": 300241,
+  "checkpoint_epoch": 6,
+  "random_legal_baseline": {
+    "top1_accuracy": 0.04465488598987773,
+    "top3_accuracy": 0.10962837478379246
+  },
+  "full_model_with_rule_filter": {
+    "legal_top1_accuracy": 0.2734513274336283,
+    "legal_top3_accuracy": 0.4415929203539823,
+    "legal_mrr": 0.4075458596014256,
+    "raw_action_legality": 0.04115044247787611,
+    "mean_model_latency_ms": 3.1932645211142607
+  },
+  "unseen_position_records": 5054,
+  "unseen_position_random_baseline": {
+    "top1_accuracy": 0.04960031102250162,
+    "top3_accuracy": 0.11833001894008104
+  },
+  "unseen_position_metrics": {
+    "legal_top1_accuracy": 0.22061733280569845,
+    "legal_top3_accuracy": 0.3698060941828255,
+    "legal_mrr": 0.3496657736168284,
+    "raw_action_legality": 0.0033636723387415906,
+    "mean_model_latency_ms": 2.694350536886686
+  },
+  "corrupted_side_token_ablation": {
+    "legal_top1_accuracy": 0.27064896755162243,
+    "legal_top3_accuracy": 0.4421828908554572,
+    "legal_mrr": 0.4064723257534295,
+    "raw_action_legality": 0.034070796460176994,
+    "mean_model_latency_ms": 2.8669975770885463
+  },
+  "rule_filter_effect": {
+    "before_filter_legal_rate": 0.04115044247787611,
+    "after_filter_legal_rate": 1.0
+  }
+}

@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>棋语 · 中国象棋 Transformer 智能体</title>
+  <style>
+    :root { --ink:#1d241f; --paper:#f4efe2; --jade:#173f35; --red:#a83b2f; --gold:#c99b45; }
+    * { box-sizing: border-box; }
+    body { margin:0; color:var(--ink); background:radial-gradient(circle at 10% 5%,#fffaf0 0,#eee4cf 48%,#d9c7a7 100%); font-family:"PingFang SC","Noto Serif SC",serif; min-height:100vh; }
+    header { padding:30px 5vw 18px; display:flex; align-items:end; justify-content:space-between; gap:20px; }
+    h1 { margin:0; letter-spacing:.18em; font-size:clamp(28px,4vw,52px); font-weight:650; }
+    h1 small { display:block; margin-top:6px; font:500 12px/1.4 system-ui; letter-spacing:.24em; color:#5c655e; }
+    .badge { background:var(--jade); color:#fff; padding:8px 13px; border-radius:999px; font:600 12px system-ui; }
+    main { padding:0 5vw 45px; display:grid; grid-template-columns:minmax(380px,660px) minmax(300px,1fr); gap:30px; align-items:start; }
+    .board-shell { background:#a8753f; padding:24px; border:1px solid #6d4929; border-radius:7px; box-shadow:0 20px 60px #46331f3d, inset 0 0 40px #5a351c35; }
+    canvas { width:100%; display:block; aspect-ratio:9/10; cursor:pointer; background:#d7a96a; border-radius:2px; }
+    canvas.busy { cursor:progress; }
+    .panel { display:grid; gap:14px; }
+    .card { padding:20px; background:#fffaf0d9; border:1px solid #ccb995; border-radius:7px; box-shadow:0 10px 35px #46331f16; backdrop-filter:blur(8px); }
+    .card h2 { margin:0 0 10px; font-size:15px; letter-spacing:.12em; color:var(--jade); }
+    .status { font-size:22px; line-height:1.4; }
+    .explanation { line-height:1.8; font-size:14px; color:#38423b; }
+    button { border:0; border-radius:4px; padding:11px 15px; margin:4px 7px 4px 0; background:var(--jade); color:white; cursor:pointer; font-weight:650; }
+    button.secondary { background:#e5d6bb; color:#3f3a32; }
+    button:hover { filter:brightness(1.08); }
+    button:disabled { cursor:not-allowed; opacity:.52; filter:none; }
+    ol { padding-left:22px; margin:6px 0; }
+    li { padding:5px 0; font:13px/1.4 system-ui; }
+    .candidate { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #dfd3bf; font:13px system-ui; }
+    .candidate:last-child { border:0; }
+    .search-meta { margin-top:10px; color:#606860; font:12px/1.6 system-ui; }
+    .legend { display:flex; gap:14px; flex-wrap:wrap; font:12px system-ui; color:#606860; margin-top:12px; }
+    .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; }
+    #toast { min-height:20px; color:var(--red); font:13px system-ui; transition:color .18s ease; }
+    #toast.thinking { color:var(--jade); }
+    @media (max-width:900px) { main { grid-template-columns:1fr; } header { align-items:start; flex-direction:column; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>棋语<small>QIYU · BOARD AS LANGUAGE</small></h1>
+    <div id="modelBadge" class="badge">正在连接智能体…</div>
+  </header>
+  <main>
+    <section class="board-shell">
+      <canvas id="board" width="720" height="800" aria-label="中国象棋棋盘"></canvas>
+      <div class="legend">
+        <span><i class="dot" style="background:#a83b2f"></i>模型注意力热区</span>
+        <span><i class="dot" style="background:#173f35"></i>当前选择</span>
+        <span><i class="dot" style="background:#c99b45"></i>合法落点</span>
+      </div>
+    </section>
+    <aside class="panel">
+      <section class="card">
+        <h2>当前状态</h2>
+        <div id="status" class="status">载入中</div>
+        <div id="toast"></div>
+        <button id="agentMove">AI 代走当前方</button>
+        <button id="reset" class="secondary">重置棋局</button>
+      </section>
+      <section class="card">
+        <h2>决策解释</h2>
+        <div id="explanation" class="explanation">等待模型决策。</div>
+      </section>
+      <section class="card">
+        <h2>AI 上一步候选</h2>
+        <div id="candidates">暂无</div>
+        <div id="searchMeta" class="search-meta"></div>
+      </section>
+      <section class="card">
+        <h2>行动记忆</h2>
+        <ol id="history"><li>尚未开始</li></ol>
+      </section>
+    </aside>
+  </main>
+  <script>
+    const canvas = document.getElementById('board');
+    const ctx = canvas.getContext('2d');
+    const statusElement = document.getElementById('status');
+    const toastElement = document.getElementById('toast');
+    const agentButton = document.getElementById('agentMove');
+    const resetButton = document.getElementById('reset');
+    const W=720,H=800,pad=40,cw=(W-pad*2)/8,ch=(H-pad*2)/9;
+    const glyph={r:'車',h:'馬',e:'象',a:'士',k:'將',c:'砲',p:'卒',R:'車',H:'馬',E:'相',A:'仕',K:'帥',C:'炮',P:'兵'};
+    const timing={humanMove:350,aiThinkMin:500,aiPreview:350,aiMove:850,settle:250};
+    const motionPreference=window.matchMedia('(prefers-reduced-motion: reduce)');
+    let reduceMotion=motionPreference.matches;
+    let state=null,displayBoard=null,selected=null,busy=false,lastMoveVisual=null,activeVisual=null;
+    const xy=i=>({r:Math.floor(i/9),c:i%9,x:pad+(i%9)*cw,y:pad+Math.floor(i/9)*ch});
+    const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+    const eased=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+    const motionTime=ms=>reduceMotion?0:ms;
+
+    if(motionPreference.addEventListener){
+      motionPreference.addEventListener('change',event=>{reduceMotion=event.matches;draw();});
+    }
+
+    function setToast(message='',thinking=false){
+      toastElement.textContent=message;
+      toastElement.classList.toggle('thinking',thinking);
+    }
+
+    function setBusy(value){
+      busy=value;
+      agentButton.disabled=value||!state||Boolean(state.winner);
+      resetButton.disabled=value||!state;
+      canvas.classList.toggle('busy',value);
+      canvas.setAttribute('aria-busy',String(value));
+    }
+
+    function drawPiece(piece,x,y,{alpha=1,scale=1,shadow=false}={}){
+      if(piece==='.')return;
+      ctx.save();ctx.globalAlpha=alpha;
+      if(shadow){ctx.shadowColor='rgba(45,28,14,.45)';ctx.shadowBlur=16;ctx.shadowOffsetY=7;}
+      ctx.fillStyle='#f3dfb4';ctx.strokeStyle=piece===piece.toUpperCase()?'#9f3027':'#202820';ctx.lineWidth=4;
+      ctx.beginPath();ctx.arc(x,y,27*scale,0,Math.PI*2);ctx.fill();ctx.stroke();
+      ctx.shadowColor='transparent';ctx.fillStyle=piece===piece.toUpperCase()?'#a8322b':'#1d2820';
+      ctx.font=`bold ${29*scale}px serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(glyph[piece],x,y+1);
+      ctx.restore();
+    }
+
+    function drawArrow(from,to,alpha=.72){
+      const dx=to.x-from.x,dy=to.y-from.y,length=Math.hypot(dx,dy);
+      if(length<12)return;
+      const ux=dx/length,uy=dy/length;
+      const start={x:from.x+ux*35,y:from.y+uy*35};
+      const end={x:to.x-ux*Math.min(35,length*.24),y:to.y-uy*Math.min(35,length*.24)};
+      ctx.save();ctx.globalAlpha=alpha;ctx.strokeStyle='#805d28';ctx.fillStyle='#805d28';ctx.lineWidth=5;ctx.lineCap='round';ctx.setLineDash([12,9]);
+      ctx.beginPath();ctx.moveTo(start.x,start.y);ctx.lineTo(end.x,end.y);ctx.stroke();ctx.setLineDash([]);
+      const angle=Math.atan2(dy,dx),size=13;
+      ctx.beginPath();ctx.moveTo(end.x,end.y);ctx.lineTo(end.x-Math.cos(angle-.55)*size,end.y-Math.sin(angle-.55)*size);ctx.lineTo(end.x-Math.cos(angle+.55)*size,end.y-Math.sin(angle+.55)*size);ctx.closePath();ctx.fill();ctx.restore();
+    }
+
+    function drawMarker(point,color,label,radius=34,alpha=1){
+      ctx.save();ctx.globalAlpha=alpha;ctx.strokeStyle=color;ctx.lineWidth=6;ctx.beginPath();ctx.arc(point.x,point.y,radius,0,Math.PI*2);ctx.stroke();
+      ctx.fillStyle=color;ctx.beginPath();ctx.arc(point.x+25,point.y-24,12,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#fffaf0';ctx.font='bold 13px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(label,point.x+25,point.y-24);ctx.restore();
+    }
+
+    function currentVisual(){
+      if(activeVisual)return activeVisual;
+      return lastMoveVisual?{transition:lastMoveVisual,stage:'settled',progress:1}:null;
+    }
+
+    function draw(){
+      if(!state||!displayBoard)return;
+      ctx.clearRect(0,0,W,H);ctx.fillStyle='#d7a96a';ctx.fillRect(0,0,W,H);
+      ctx.strokeStyle='#563719';ctx.lineWidth=2;
+      for(let r=0;r<10;r++){ctx.beginPath();ctx.moveTo(pad,pad+r*ch);ctx.lineTo(W-pad,pad+r*ch);ctx.stroke();}
+      for(let c=0;c<9;c++){
+        ctx.beginPath();ctx.moveTo(pad+c*cw,pad);ctx.lineTo(pad+c*cw,pad+4*ch);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(pad+c*cw,pad+5*ch);ctx.lineTo(pad+c*cw,H-pad);ctx.stroke();
+      }
+      [[3,0,5,2],[3,7,5,9]].forEach(([c1,r1,c2,r2])=>{
+        ctx.beginPath();ctx.moveTo(pad+c1*cw,pad+r1*ch);ctx.lineTo(pad+c2*cw,pad+r2*ch);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(pad+c2*cw,pad+r1*ch);ctx.lineTo(pad+c1*cw,pad+r2*ch);ctx.stroke();
+      });
+      ctx.fillStyle='#563719';ctx.font='32px serif';ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText('楚 河',pad+cw*2,pad+ch*4.5);ctx.fillText('漢 界',pad+cw*6,pad+ch*4.5);
+
+      const attention=state.attention||[];
+      const maxAttention=Math.max(...attention,0.00001);
+      attention.forEach((v,i)=>{if(v<=0)return;const p=xy(i),a=.08+.42*v/maxAttention;ctx.fillStyle=`rgba(168,59,47,${a})`;ctx.beginPath();ctx.arc(p.x,p.y,29,0,Math.PI*2);ctx.fill();});
+
+      const visual=currentVisual();
+      let movingPosition=null,movingScale=1,captureAlpha=1;
+      if(visual){
+        const source=xy(visual.transition.source),destination=xy(visual.transition.destination);
+        if(visual.stage==='moving'){
+          const progress=eased(visual.progress);
+          movingPosition={x:source.x+(destination.x-source.x)*progress,y:source.y+(destination.y-source.y)*progress};
+          movingScale=1+.09*Math.sin(Math.PI*progress);captureAlpha=progress<.68?1:Math.max(0,1-(progress-.68)/.32);
+          drawArrow(source,movingPosition,.45+.4*progress);
+        }else if(visual.stage!=='preview'){
+          drawArrow(source,destination);
+        }
+      }
+
+      if(selected!==null&&!busy){
+        const p=xy(selected);ctx.strokeStyle='#173f35';ctx.lineWidth=6;ctx.beginPath();ctx.arc(p.x,p.y,32,0,Math.PI*2);ctx.stroke();
+        (state.legal[String(selected)]||[]).forEach(i=>{const q=xy(i);ctx.fillStyle='#c99b45';ctx.beginPath();ctx.arc(q.x,q.y,9,0,Math.PI*2);ctx.fill();});
+      }
+
+      displayBoard.forEach((piece,i)=>{
+        if(piece==='.')return;
+        if(visual&&visual.stage==='moving'&&i===visual.transition.source)return;
+        const alpha=visual&&visual.stage==='moving'&&i===visual.transition.destination&&visual.transition.captured!=='.'?captureAlpha:1;
+        if(alpha>0)drawPiece(piece,xy(i).x,xy(i).y,{alpha});
+      });
+
+      if(visual){
+        const source=xy(visual.transition.source),destination=xy(visual.transition.destination);
+        if(visual.stage==='preview'){
+          const pulse=reduceMotion?0:Math.sin(visual.progress*Math.PI*2)*3;
+          drawMarker(source,'#173f35','起',34+pulse);
+        }else{
+          drawMarker(source,'#173f35','起');drawMarker(destination,'#c99b45','落');
+          if(visual.stage==='settle'){
+            const radius=35+visual.progress*28,alpha=1-visual.progress;
+            ctx.save();ctx.globalAlpha=alpha;ctx.strokeStyle='#c99b45';ctx.lineWidth=6;ctx.beginPath();ctx.arc(destination.x,destination.y,radius,0,Math.PI*2);ctx.stroke();ctx.restore();
+          }
+        }
+        if(visual.stage==='moving'&&movingPosition){drawPiece(visual.transition.piece,movingPosition.x,movingPosition.y,{scale:movingScale,shadow:true});}
+      }
+    }
+
+    function renderPanels(s){
+      document.getElementById('modelBadge').textContent=(s.model_ready?'Transformer 已加载':'教师策略备用模式')+' · '+s.device;
+      statusElement.textContent=s.winner?(s.winner==='red'?'红方获胜':'黑方获胜'):(s.side==='red'?'红方行棋':'黑方行棋');
+      document.getElementById('explanation').textContent=s.explanation;
+      const candidates=s.candidates||[];
+      document.getElementById('candidates').innerHTML=candidates.length?candidates.map((x,i)=>`<div class="candidate"><span>${i+1}. ${x.move}</span><strong>${(x.score*100).toFixed(1)}%</strong></div>`).join(''):'暂无';
+      const search=s.search||{};
+      document.getElementById('searchMeta').textContent=search.nodes?`搜索 ${search.depth} 层 · ${search.nodes} 节点 · ${search.elapsed_ms} ms`:(search.opening_book?'职业开局库命中':'');
+      document.getElementById('history').innerHTML=s.history.length?s.history.map(x=>`<li>${x.side==='red'?'红':'黑'}：${x.description}</li>`).join(''):'<li>尚未开始</li>';
+      setBusy(busy);
+    }
+
+    function applyState(s,{showLastMove=true}={}){
+      state=s;displayBoard=s.board.slice();selected=null;activeVisual=null;lastMoveVisual=showLastMove?s.last_move:null;
+      renderPanels(s);draw();
+    }
+
+    function animateFrames(duration,onFrame){
+      if(duration<=0){onFrame(1);return Promise.resolve();}
+      return new Promise(resolve=>{
+        const started=performance.now();
+        function frame(now){
+          const progress=Math.min((now-started)/duration,1);onFrame(progress);
+          if(progress<1)requestAnimationFrame(frame);else resolve();
+        }
+        requestAnimationFrame(frame);
+      });
+    }
+
+    async function previewMove(transition){
+      activeVisual={transition,stage:'preview',progress:0};lastMoveVisual=null;draw();
+      await animateFrames(motionTime(timing.aiPreview),progress=>{activeVisual.progress=progress;draw();});
+    }
+
+    async function animateTransition(payload,duration,{settle=false,statusText=''}={}){
+      const nextState=payload.state,transition=payload.transition;
+      if(!transition){applyState(nextState);return;}
+      state=nextState;selected=null;renderPanels(nextState);
+      if(statusText)statusElement.textContent=statusText;
+      activeVisual={transition,stage:'moving',progress:0};lastMoveVisual=null;draw();
+      await animateFrames(motionTime(duration),progress=>{activeVisual.progress=progress;draw();});
+      displayBoard=nextState.board.slice();lastMoveVisual=transition;activeVisual=null;draw();
+      if(settle&&motionTime(timing.settle)>0){
+        activeVisual={transition,stage:'settle',progress:0};
+        await animateFrames(timing.settle,progress=>{activeVisual.progress=progress;draw();});
+        activeVisual=null;draw();
+      }
+      renderPanels(nextState);
+    }
+
+    async function api(path,body={}){
+      const isState=path==='/api/state';
+      const response=await fetch(path,{method:isState?'GET':'POST',headers:{'Content-Type':'application/json'},body:isState?undefined:JSON.stringify(body)});
+      const data=await response.json();
+      if(!response.ok)throw new Error(data.error||'请求失败');
+      if(!data.state)throw new Error('服务器返回了无效状态');
+      return data;
+    }
+
+    async function requestAndAnimateAgent(){
+      setToast('智能体正在分析当前局面…',true);statusElement.textContent='AI 正在思考…';
+      const [payload]=await Promise.all([api('/api/agent-move'),wait(timing.aiThinkMin)]);
+      if(!payload.transition){applyState(payload.state);return;}
+      state=payload.state;renderPanels(state);
+      statusElement.textContent=`AI 将移动：${payload.transition.description}`;setToast('请看棋盘上的起点提示。',true);
+      await previewMove(payload.transition);
+      setToast('AI 正在落子…',true);
+      await animateTransition(payload,timing.aiMove,{settle:true,statusText:`AI 正在落子：${payload.transition.description}`});
+      setToast('');
+    }
+
+    async function runHumanTurn(source,destination){
+      if(busy)return;
+      setBusy(true);selected=null;draw();setToast('正在确认你的落子…',true);
+      try{
+        const humanPayload=await api('/api/move',{source,destination});
+        await animateTransition(humanPayload,timing.humanMove,{statusText:`你走：${humanPayload.transition.description}`});
+        if(!humanPayload.state.winner)await requestAndAnimateAgent();
+        else setToast('');
+      }catch(error){
+        setToast(error.message);
+      }finally{
+        setBusy(false);draw();
+      }
+    }
+
+    canvas.addEventListener('click',event=>{
+      if(busy||!state||state.winner)return;
+      if(state.side!=='red'){setToast('当前轮到黑方，请点击“AI 代走当前方”。');return;}
+      const rect=canvas.getBoundingClientRect(),sx=W/rect.width,sy=H/rect.height;
+      const c=Math.round((event.clientX-rect.left)*sx/cw-pad/cw),r=Math.round((event.clientY-rect.top)*sy/ch-pad/ch);
+      if(c<0||c>8||r<0||r>9)return;
+      const index=r*9+c;
+      if(selected===null){
+        if(state.legal[String(index)]){selected=index;setToast('');draw();}
+      }else if((state.legal[String(selected)]||[]).includes(index)){
+        runHumanTurn(selected,index);
+      }else{
+        selected=state.legal[String(index)]?index:null;draw();
+      }
+    });
+
+    resetButton.onclick=async()=>{
+      if(busy)return;
+      setBusy(true);setToast('正在重置棋局…',true);
+      try{applyState((await api('/api/reset')).state,{showLastMove:false});setToast('');}
+      catch(error){setToast(error.message);}
+      finally{setBusy(false);draw();}
+    };
+
+    agentButton.onclick=async()=>{
+      if(busy||!state||state.winner)return;
+      setBusy(true);selected=null;draw();
+      try{await requestAndAnimateAgent();}
+      catch(error){setToast(error.message);}
+      finally{setBusy(false);draw();}
+    };
+
+    setBusy(true);
+    api('/api/state').then(payload=>{applyState(payload.state);setToast('');}).catch(error=>setToast(error.message)).finally(()=>setBusy(false));
+  </script>
+</body>
+</html>
