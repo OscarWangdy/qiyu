@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: qiyu
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements_v3_runtime.txt
+    startCommand: python -m qiyu.server --checkpoint artifacts/training_v3_long/best_model.pt --opening-book artifacts/master_data_v3/opening_book.json --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health

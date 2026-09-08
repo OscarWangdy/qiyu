@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -142,7 +144,31 @@ class Game:
             return {"state": self._state_unlocked(), "transition": None}
 
 
-GAME: Optional[Game] = None
+AGENT: Optional[QiYuAgent] = None
+GAMES: Dict[str, tuple[Game, float]] = {}
+GAMES_LOCK = threading.Lock()
+SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+SESSION_TTL_SECONDS = 6 * 60 * 60
+MAX_SESSIONS = 256
+
+
+def game_for_session(session_id: str) -> Game:
+    """为每个浏览器会话维护独立棋局，同时共享只读模型。"""
+    if not SESSION_PATTERN.fullmatch(session_id):
+        raise ValueError("无效的棋局会话")
+    now = time.monotonic()
+    with GAMES_LOCK:
+        expired = [key for key, (_, accessed) in GAMES.items() if now - accessed > SESSION_TTL_SECONDS]
+        for key in expired:
+            GAMES.pop(key, None)
+        if session_id not in GAMES:
+            if len(GAMES) >= MAX_SESSIONS:
+                oldest = min(GAMES, key=lambda key: GAMES[key][1])
+                GAMES.pop(oldest, None)
+            GAMES[session_id] = (Game(AGENT), now)
+        game, _ = GAMES[session_id]
+        GAMES[session_id] = (game, now)
+        return game
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -154,12 +180,19 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
+    def _game(self) -> Game:
+        return game_for_session(self.headers.get("X-Qiyu-Session", ""))
+
     def do_GET(self):
+        if self.path == "/api/health":
+            self._json({"ok": True, "model_ready": bool(AGENT and AGENT.ready)})
+            return
         if self.path == "/api/state":
-            self._json({"state": GAME.state(), "transition": None})
+            self._json({"state": self._game().state(), "transition": None})
             return
         super().do_GET()
 
@@ -167,12 +200,13 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
+            game = self._game()
             if self.path == "/api/reset":
-                self._json(GAME.reset_response())
+                self._json(game.reset_response())
             elif self.path == "/api/move":
-                self._json(GAME.human_move(int(payload["source"]), int(payload["destination"])))
+                self._json(game.human_move(int(payload["source"]), int(payload["destination"])))
             elif self.path == "/api/agent-move":
-                self._json(GAME.agent_step())
+                self._json(game.agent_step())
             else:
                 self._json({"error": "未知接口"}, 404)
         except (ValueError, KeyError, json.JSONDecodeError) as error:
@@ -183,17 +217,17 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def main() -> None:
-    global GAME
+    global AGENT
     parser = argparse.ArgumentParser(description="启动棋语智能体演示")
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--opening-book", type=Path, default=DEFAULT_OPENING_BOOK)
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8765")))
     args = parser.parse_args()
-    GAME = Game(QiYuAgent(args.checkpoint, args.opening_book))
+    AGENT = QiYuAgent(args.checkpoint, args.opening_book)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"棋语演示已启动：http://{args.host}:{args.port}")
-    print(f"模型：{'已加载' if GAME.agent.ready else '未找到权重，使用教师策略'}")
+    print(f"模型：{'已加载' if AGENT.ready else '未找到权重，使用教师策略'}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

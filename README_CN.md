@@ -1,5 +1,7 @@
 # 棋语 v3_long 候选模型包
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/OscarWangdy/qiyu)
+
 这个包不是网页链接，而是实际文件。请把本包内容解压/合并到你的 `棋语智能体` 项目根目录。
 
 ## 包内关键文件
@@ -25,6 +27,12 @@ python -m qiyu.server \
 ```text
 http://127.0.0.1:8765
 ```
+
+## 发布公网试玩地址
+
+点击文档顶部的 **Deploy to Render** 按钮，登录 Render 并确认创建免费 Web Service。部署完成后会得到一个公开的 `onrender.com` 地址。云端会自动加载本包中的模型和开局库，每位访客拥有独立棋局。
+
+免费实例在一段时间无人访问后会休眠，下一位访客首次打开时需要等待服务唤醒。
 
 ## 如果没有依赖
 

@@ -84,6 +84,8 @@
     const W=720,H=800,pad=40,cw=(W-pad*2)/8,ch=(H-pad*2)/9;
     const glyph={r:'車',h:'馬',e:'象',a:'士',k:'將',c:'砲',p:'卒',R:'車',H:'馬',E:'相',A:'仕',K:'帥',C:'炮',P:'兵'};
     const timing={humanMove:350,aiThinkMin:500,aiPreview:350,aiMove:850,settle:250};
+    const sessionId=sessionStorage.getItem('qiyu-session')||crypto.randomUUID();
+    sessionStorage.setItem('qiyu-session',sessionId);
     const motionPreference=window.matchMedia('(prefers-reduced-motion: reduce)');
     let reduceMotion=motionPreference.matches;
     let state=null,displayBoard=null,selected=null,busy=false,lastMoveVisual=null,activeVisual=null;
@@ -257,7 +259,7 @@
 
     async function api(path,body={}){
       const isState=path==='/api/state';
-      const response=await fetch(path,{method:isState?'GET':'POST',headers:{'Content-Type':'application/json'},body:isState?undefined:JSON.stringify(body)});
+      const response=await fetch(path,{method:isState?'GET':'POST',headers:{'Content-Type':'application/json','X-Qiyu-Session':sessionId},body:isState?undefined:JSON.stringify(body)});
       const data=await response.json();
       if(!response.ok)throw new Error(data.error||'请求失败');
       if(!data.state)throw new Error('服务器返回了无效状态');
