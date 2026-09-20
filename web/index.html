@@ -32,6 +32,21 @@
     .search-meta { margin-top:10px; color:#606860; font:12px/1.6 system-ui; }
     .legend { display:flex; gap:14px; flex-wrap:wrap; font:12px system-ui; color:#606860; margin-top:12px; }
     .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; }
+    .heat-scale { display:inline-block; width:84px; height:9px; margin:0 5px; border-radius:99px; background:linear-gradient(90deg,rgba(168,59,47,.08),rgba(168,59,47,.78)); }
+    .side-picker { display:flex; gap:8px; margin:10px 0; }
+    .side-picker button { flex:1; margin:0; background:#e5d6bb; color:#3f3a32; }
+    .side-picker button.active { background:var(--jade); color:#fff; box-shadow:inset 0 0 0 2px #c99b45; }
+    .attention-list { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+    .attention-chip { padding:5px 8px; border-radius:999px; background:#f0d4c8; color:#76291f; font:600 12px system-ui; }
+    .chat-log { height:190px; overflow:auto; padding:8px; border:1px solid #dfd3bf; border-radius:5px; background:#fffdf7; }
+    .message { max-width:92%; margin:7px 0; padding:8px 10px; border-radius:8px; font:13px/1.55 system-ui; white-space:pre-wrap; }
+    .message.user { margin-left:auto; background:#173f35; color:#fff; }
+    .message.assistant { background:#eee3cf; color:#2e3832; }
+    .chat-form { display:flex; gap:7px; margin-top:8px; }
+    .chat-form input { min-width:0; flex:1; border:1px solid #b9a98d; border-radius:4px; padding:10px; background:#fffdf8; font:14px system-ui; }
+    .chat-form button { margin:0; }
+    .quick-questions { display:flex; gap:6px; flex-wrap:wrap; margin-top:7px; }
+    .quick-questions button { padding:6px 9px; margin:0; background:#e5d6bb; color:#3f3a32; font-size:12px; }
     #toast { min-height:20px; color:var(--red); font:13px system-ui; transition:color .18s ease; }
     #toast.thinking { color:var(--jade); }
     @media (max-width:900px) { main { grid-template-columns:1fr; } header { align-items:start; flex-direction:column; } }
@@ -46,18 +61,36 @@
     <section class="board-shell">
       <canvas id="board" width="720" height="800" aria-label="中国象棋棋盘"></canvas>
       <div class="legend">
-        <span><i class="dot" style="background:#a83b2f"></i>模型注意力热区</span>
+        <span>注意力低<span class="heat-scale"></span>高</span>
         <span><i class="dot" style="background:#173f35"></i>当前选择</span>
         <span><i class="dot" style="background:#c99b45"></i>合法落点</span>
       </div>
+      <div id="attentionList" class="attention-list" aria-label="注意力前五位"></div>
     </section>
     <aside class="panel">
       <section class="card">
         <h2>当前状态</h2>
         <div id="status" class="status">载入中</div>
         <div id="toast"></div>
+        <div class="side-picker" aria-label="选择执棋方">
+          <button type="button" data-side="red" class="active">我执红棋</button>
+          <button type="button" data-side="black">我执黑棋</button>
+        </div>
         <button id="agentMove">AI 代走当前方</button>
         <button id="reset" class="secondary">重置棋局</button>
+      </section>
+      <section class="card">
+        <h2>棋语助教·新手可随时问</h2>
+        <div id="chatLog" class="chat-log" aria-live="polite"></div>
+        <form id="chatForm" class="chat-form">
+          <input id="chatInput" maxlength="200" autocomplete="off" placeholder="例如：这步怎么走？" aria-label="向棋语助教提问">
+          <button type="submit">发送</button>
+        </form>
+        <div class="quick-questions">
+          <button type="button" data-question="这步怎么走？">推荐一步</button>
+          <button type="button" data-question="为什么这样走？">解释原因</button>
+          <button type="button" data-question="注意力热图怎么看？">怎么看热图</button>
+        </div>
       </section>
       <section class="card">
         <h2>决策解释</h2>
@@ -81,6 +114,10 @@
     const toastElement = document.getElementById('toast');
     const agentButton = document.getElementById('agentMove');
     const resetButton = document.getElementById('reset');
+    const chatForm = document.getElementById('chatForm');
+    const chatInput = document.getElementById('chatInput');
+    const chatLog = document.getElementById('chatLog');
+    const sideButtons = [...document.querySelectorAll('[data-side]')];
     const W=720,H=800,pad=40,cw=(W-pad*2)/8,ch=(H-pad*2)/9;
     const glyph={r:'車',h:'馬',e:'象',a:'士',k:'將',c:'砲',p:'卒',R:'車',H:'馬',E:'相',A:'仕',K:'帥',C:'炮',P:'兵'};
     const timing={humanMove:350,aiThinkMin:500,aiPreview:350,aiMove:850,settle:250};
@@ -89,7 +126,9 @@
     const motionPreference=window.matchMedia('(prefers-reduced-motion: reduce)');
     let reduceMotion=motionPreference.matches;
     let state=null,displayBoard=null,selected=null,busy=false,lastMoveVisual=null,activeVisual=null;
-    const xy=i=>({r:Math.floor(i/9),c:i%9,x:pad+(i%9)*cw,y:pad+Math.floor(i/9)*ch});
+    const visualIndex=i=>state&&state.human_side==='black'?89-i:i;
+    const boardIndex=(r,c)=>state&&state.human_side==='black'?89-(r*9+c):r*9+c;
+    const xy=i=>{const visual=visualIndex(i);return {r:Math.floor(visual/9),c:visual%9,x:pad+(visual%9)*cw,y:pad+Math.floor(visual/9)*ch};};
     const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
     const eased=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
     const motionTime=ms=>reduceMotion?0:ms;
@@ -107,6 +146,9 @@
       busy=value;
       agentButton.disabled=value||!state||Boolean(state.winner);
       resetButton.disabled=value||!state;
+      sideButtons.forEach(button=>button.disabled=value||!state);
+      chatInput.disabled=value||!state;
+      chatForm.querySelector('button').disabled=value||!state;
       canvas.classList.toggle('busy',value);
       canvas.setAttribute('aria-busy',String(value));
     }
@@ -163,7 +205,8 @@
 
       const attention=state.attention||[];
       const maxAttention=Math.max(...attention,0.00001);
-      attention.forEach((v,i)=>{if(v<=0)return;const p=xy(i),a=.08+.42*v/maxAttention;ctx.fillStyle=`rgba(168,59,47,${a})`;ctx.beginPath();ctx.arc(p.x,p.y,29,0,Math.PI*2);ctx.fill();});
+      const topAttention=[...attention.keys()].sort((a,b)=>attention[b]-attention[a]).slice(0,5);
+      attention.forEach((v,i)=>{if(v<=0)return;const p=xy(i),a=.06+.60*v/maxAttention;ctx.fillStyle=`rgba(168,59,47,${a})`;ctx.beginPath();ctx.arc(p.x,p.y,29,0,Math.PI*2);ctx.fill();});
 
       const visual=currentVisual();
       let movingPosition=null,movingScale=1,captureAlpha=1;
@@ -191,6 +234,12 @@
         if(alpha>0)drawPiece(piece,xy(i).x,xy(i).y,{alpha});
       });
 
+      topAttention.forEach(i=>{
+        const v=attention[i];if(!v)return;const p=xy(i);
+        ctx.save();ctx.fillStyle='rgba(91,24,18,.88)';ctx.fillRect(p.x-23,p.y+18,46,20);
+        ctx.fillStyle='#fffaf0';ctx.font='bold 12px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(`${(v*100).toFixed(1)}%`,p.x,p.y+28);ctx.restore();
+      });
+
       if(visual){
         const source=xy(visual.transition.source),destination=xy(visual.transition.destination);
         if(visual.stage==='preview'){
@@ -208,15 +257,29 @@
     }
 
     function renderPanels(s){
-      document.getElementById('modelBadge').textContent=(s.model_ready?'Transformer 已加载':'教师策略备用模式')+' · '+s.device;
+      const retrained=s.model_metrics&&s.model_metrics.continuation_epoch;
+      document.getElementById('modelBadge').textContent=(s.model_ready?(retrained?'Transformer 续训版':'Transformer 已加载'):'教师策略备用模式')+' · '+s.device;
       statusElement.textContent=s.winner?(s.winner==='red'?'红方获胜':'黑方获胜'):(s.side==='red'?'红方行棋':'黑方行棋');
       document.getElementById('explanation').textContent=s.explanation;
       const candidates=s.candidates||[];
-      document.getElementById('candidates').innerHTML=candidates.length?candidates.map((x,i)=>`<div class="candidate"><span>${i+1}. ${x.move}</span><strong>${(x.score*100).toFixed(1)}%</strong></div>`).join(''):'暂无';
+      document.getElementById('candidates').innerHTML=candidates.length?candidates.map((x,i)=>`<div class="candidate"><span>${i+1}. ${x.notation||'候选着'}</span><strong>${(x.score*100).toFixed(1)}%</strong></div>`).join(''):'暂无';
       const search=s.search||{};
       document.getElementById('searchMeta').textContent=search.nodes?`搜索 ${search.depth} 层 · ${search.nodes} 节点 · ${search.elapsed_ms} ms`:(search.opening_book?'职业开局库命中':'');
       document.getElementById('history').innerHTML=s.history.length?s.history.map(x=>`<li>${x.side==='red'?'红':'黑'}：${x.description}</li>`).join(''):'<li>尚未开始</li>';
+      sideButtons.forEach(button=>button.classList.toggle('active',button.dataset.side===s.human_side));
+      const attention=s.attention||[];
+      const top=[...attention.keys()].sort((a,b)=>attention[b]-attention[a]).slice(0,5).filter(i=>attention[i]>0);
+      document.getElementById('attentionList').innerHTML=top.length?top.map((i,rank)=>`<span class="attention-chip">#${rank+1} 关注 ${(attention[i]*100).toFixed(1)}%</span>`).join(''):'';
+      renderChat(s.chat||[]);
       setBusy(busy);
+    }
+
+    function renderChat(messages){
+      chatLog.replaceChildren();
+      messages.forEach(message=>{
+        const item=document.createElement('div');item.className=`message ${message.role}`;item.textContent=message.content;chatLog.appendChild(item);
+      });
+      chatLog.scrollTop=chatLog.scrollHeight;
     }
 
     function applyState(s,{showLastMove=true}={}){
@@ -295,11 +358,11 @@
 
     canvas.addEventListener('click',event=>{
       if(busy||!state||state.winner)return;
-      if(state.side!=='red'){setToast('当前轮到黑方，请点击“AI 代走当前方”。');return;}
+      if(state.side!==state.human_side){setToast('当前轮到智能体，请稍候或点击“AI 代走当前方”。');return;}
       const rect=canvas.getBoundingClientRect(),sx=W/rect.width,sy=H/rect.height;
       const c=Math.round((event.clientX-rect.left)*sx/cw-pad/cw),r=Math.round((event.clientY-rect.top)*sy/ch-pad/ch);
       if(c<0||c>8||r<0||r>9)return;
-      const index=r*9+c;
+      const index=boardIndex(r,c);
       if(selected===null){
         if(state.legal[String(index)]){selected=index;setToast('');draw();}
       }else if((state.legal[String(selected)]||[]).includes(index)){
@@ -312,10 +375,36 @@
     resetButton.onclick=async()=>{
       if(busy)return;
       setBusy(true);setToast('正在重置棋局…',true);
-      try{applyState((await api('/api/reset')).state,{showLastMove:false});setToast('');}
+      try{
+        const payload=await api('/api/reset',{human_side:state.human_side});
+        applyState(payload.state,{showLastMove:Boolean(payload.transition)});
+        setToast(payload.transition?`你执黑棋，AI 已先行：${payload.transition.description}`:'');
+      }
       catch(error){setToast(error.message);}
       finally{setBusy(false);draw();}
     };
+
+    sideButtons.forEach(button=>button.onclick=async()=>{
+      if(busy||!state||button.dataset.side===state.human_side)return;
+      setBusy(true);setToast('正在切换执棋方…',true);
+      try{
+        const payload=await api('/api/reset',{human_side:button.dataset.side});
+        applyState(payload.state,{showLastMove:Boolean(payload.transition)});
+        setToast(payload.transition?`你执黑棋，AI 已先行：${payload.transition.description}`:'你执红棋，请先行。');
+      }catch(error){setToast(error.message);}
+      finally{setBusy(false);draw();}
+    });
+
+    async function askQuestion(question){
+      question=question.trim();if(!question||busy)return;
+      setBusy(true);chatInput.value='';setToast('棋语助教正在分析…',true);
+      try{const payload=await api('/api/chat',{question});applyState(payload.state);setToast('');}
+      catch(error){setToast(error.message);}
+      finally{setBusy(false);draw();chatInput.focus();}
+    }
+
+    chatForm.addEventListener('submit',event=>{event.preventDefault();askQuestion(chatInput.value);});
+    document.querySelectorAll('[data-question]').forEach(button=>button.onclick=()=>askQuestion(button.dataset.question));
 
     agentButton.onclick=async()=>{
       if(busy||!state||state.winner)return;

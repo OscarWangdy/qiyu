@@ -18,11 +18,12 @@ from .rules import (
     Move,
     apply_unchecked,
     board_to_string,
+    board_point_name,
     legal_moves,
     move_description,
+    move_notation,
     opponent,
     parse_move,
-    square_name,
 )
 
 
@@ -89,7 +90,7 @@ class QiYuAgent:
             return Decision(
                 move=move,
                 confidence=1.0,
-                candidates=[{"move": move.key, "score": 1.0}],
+                candidates=[{"move": move.key, "notation": move_notation(board, move), "score": 1.0}],
                 attention=[0.0] * 90,
                 explanation="模型权重尚未加载，当前由可复现的教师策略完成决策。" + move_description(board, move) + "。",
                 engine="teacher-fallback",
@@ -118,7 +119,12 @@ class QiYuAgent:
             visits = sum(count for count, _ in book_candidates)
             move = book_candidates[0][1]
             candidates = [
-                {"move": candidate.key, "score": round(count / visits, 4), "master_games": count}
+                {
+                    "move": candidate.key,
+                    "notation": move_notation(board, candidate),
+                    "score": round(count / visits, 4),
+                    "master_games": count,
+                }
                 for count, candidate in book_candidates[:5]
             ]
             return Decision(
@@ -166,6 +172,7 @@ class QiYuAgent:
         top_candidates = [
             {
                 "move": item[1].key,
+                "notation": move_notation(board, item[1]),
                 "score": round(probabilities_all[index], 4),
                 "value": round(float(item[2]), 3),
                 "search_score": round(float(item[0]), 3),
@@ -173,7 +180,7 @@ class QiYuAgent:
             for index, item in enumerate(scored_moves[:5])
         ]
         top_focus = sorted(range(90), key=lambda index: focus[index], reverse=True)[:3]
-        focus_text = "、".join(square_name(index) for index in top_focus)
+        focus_text = "、".join(board_point_name(index, side) for index in top_focus)
         explanation = (
             f"模型在 {len(legal)} 个合法动作中进行策略排序，并用 {self.search_config.depth} 层限时搜索选择了{move_description(board, move)}。"
             f"决策时最关注的棋盘位置是 {focus_text}；界面上的红色热区显示完整注意力分布。"

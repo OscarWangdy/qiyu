@@ -182,6 +182,12 @@ def load_checkpoint(path: str, device: torch.device) -> Tuple[QiYuTransformer, D
     payload = torch.load(path, map_location=device, weights_only=False)
     model = QiYuTransformer(ModelConfig(**payload["config"]))
     # strict=False 保持第一版（没有 value head）的旧权重仍可打开。
-    model.load_state_dict(payload["model_state"], strict=False)
+    load_result = model.load_state_dict(payload["model_state"], strict=False)
     model.to(device).eval()
-    return model, payload.get("extra", {})
+    metadata = dict(payload.get("extra", {}))
+    metadata["_missing_keys"] = list(load_result.missing_keys)
+    metadata["_unexpected_keys"] = list(load_result.unexpected_keys)
+    metadata["_has_value_head"] = not any(
+        key.startswith("value_head.") for key in load_result.missing_keys
+    )
+    return model, metadata

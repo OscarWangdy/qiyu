@@ -1,8 +1,8 @@
 """轻量、无第三方依赖的中国象棋规则环境。
 
-坐标约定：棋盘左上角是 a0，右下角是 i9；小写棋子为黑方，
-大写棋子为红方。实现覆盖项目演示所需的走法、蹩马腿、塞象眼、
-炮架、九宫、过河兵、将帅照面、自将检测与终局判断。
+内部使用 0–89 的一维下标；面向使用者的文案一律使用中国象棋记谱。
+小写棋子为黑方，大写棋子为红方。实现覆盖项目演示所需的走法、
+蹩马腿、塞象眼、炮架、九宫、过河兵、将帅照面、自将检测与终局判断。
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ PIECE_NAMES = {
     "K": "帅", "A": "仕", "E": "相", "H": "马", "R": "车", "C": "炮", "P": "兵",
     "k": "将", "a": "士", "e": "象", "h": "马", "r": "车", "c": "炮", "p": "卒",
 }
+CN_NUMERALS = "零一二三四五六七八九"
 
 
 @dataclass(frozen=True)
@@ -57,8 +58,71 @@ def inside(row: int, col: int) -> bool:
 
 
 def square_name(index: int) -> str:
+    """返回仅供数据集和开局库使用的内部坐标。"""
     row, col = rc(index)
     return f"{chr(ord('a') + col)}{row}"
+
+
+def _file_number(col: int, side: str) -> int:
+    """中国象棋的路数从行棋方右侧开始计数。"""
+    return 9 - col if side == RED else col + 1
+
+
+def board_point_name(index: int, perspective: str = RED) -> str:
+    """在解释注意力时使用的中文棋盘位置。"""
+    row, col = rc(index)
+    file_text = CN_NUMERALS[_file_number(col, perspective)]
+    distance = (9 - row) if perspective == RED else row
+    return f"{file_text}路·离{'红' if perspective == RED else '黑'}方底线第 {distance + 1} 格"
+
+
+def move_notation(board: Sequence[str], move: Move) -> str:
+    """将内部位移转为标准的中国象棋文字记谱。
+
+    例如红方中炮开局表达为“炮二平五”，不再对使用者显示 a0-a1
+    这类国际象棋风格坐标。
+    """
+    piece = board[move.src]
+    if piece == EMPTY:
+        raise ValueError("起点没有棋子")
+    side = piece_side(piece)
+    source_row, source_col = rc(move.src)
+    destination_row, destination_col = rc(move.dst)
+    actor = PIECE_NAMES.get(piece, piece)
+
+    same_file = [
+        index
+        for index, candidate in enumerate(board)
+        if candidate == piece and rc(index)[1] == source_col
+    ]
+    if len(same_file) > 1:
+        ordered = sorted(same_file, key=lambda index: rc(index)[0], reverse=side == BLACK)
+        position = ordered.index(move.src)
+        if len(ordered) == 2:
+            prefix = "前" if position == 0 else "后"
+        elif position == 0:
+            prefix = "前"
+        elif position == len(ordered) - 1:
+            prefix = "后"
+        elif len(ordered) > 3:
+            prefix = CN_NUMERALS[position + 1]
+        else:
+            prefix = "中"
+        head = prefix + actor
+    else:
+        head = actor + CN_NUMERALS[_file_number(source_col, side)]
+
+    if destination_row == source_row:
+        action = "平"
+        suffix = CN_NUMERALS[_file_number(destination_col, side)]
+    else:
+        forward = destination_row < source_row if side == RED else destination_row > source_row
+        action = "进" if forward else "退"
+        if piece.upper() in {"H", "E", "A"}:
+            suffix = CN_NUMERALS[_file_number(destination_col, side)]
+        else:
+            suffix = CN_NUMERALS[abs(destination_row - source_row)]
+    return head + action + suffix
 
 
 def parse_square(name: str) -> int:
@@ -254,9 +318,8 @@ def winner(board: Sequence[str], side_to_move: str) -> Optional[str]:
 
 
 def move_description(board: Sequence[str], move: Move) -> str:
-    actor = PIECE_NAMES.get(board[move.src], board[move.src])
     capture = f"，吃掉{PIECE_NAMES.get(move.captured, move.captured)}" if move.captured != EMPTY else ""
-    return f"{actor}从 {square_name(move.src)} 走到 {square_name(move.dst)}{capture}"
+    return f"{move_notation(board, move)}{capture}"
 
 
 def render_text(board: Sequence[str]) -> str:
