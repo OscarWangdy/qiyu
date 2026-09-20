@@ -1,0 +1,31 @@
+{
+  "evaluation_records": 6780,
+  "parameters": 300241,
+  "checkpoint_continuation_epoch": 17,
+  "full_model_with_rule_filter": {
+    "legal_top1_accuracy": 0.3005899705014749,
+    "legal_top3_accuracy": 0.47699115044247786,
+    "legal_mrr": 0.43440485303704235,
+    "raw_action_legality": 0.03215339233038348,
+    "mean_model_latency_ms": 1.6205501319054954
+  },
+  "unseen_position_records": 5054,
+  "unseen_position_metrics": {
+    "legal_top1_accuracy": 0.2263553620894341,
+    "legal_top3_accuracy": 0.38583300356153544,
+    "legal_mrr": 0.3603582805125154,
+    "raw_action_legality": 0.0033636723387415906,
+    "mean_model_latency_ms": 1.6126273933387203
+  },
+  "corrupted_side_token_ablation": {
+    "legal_top1_accuracy": 0.2930678466076696,
+    "legal_top3_accuracy": 0.4775811209439528,
+    "legal_mrr": 0.43045932503502893,
+    "raw_action_legality": 0.031563421828908554,
+    "mean_model_latency_ms": 1.6302175697193402
+  },
+  "rule_filter_effect": {
+    "before_filter_legal_rate": 0.03215339233038348,
+    "after_filter_legal_rate": 1.0
+  }
+}

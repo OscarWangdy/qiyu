@@ -1,0 +1,6 @@
+{
+  "status": "completed",
+  "continuation_epochs": 20,
+  "best_legal_top1_accuracy": 0.32728461664214487,
+  "total_seconds": 1963.57
+}

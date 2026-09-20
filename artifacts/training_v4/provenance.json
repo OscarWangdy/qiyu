@@ -1,0 +1,33 @@
+{
+  "artifact_version": "qiyu-v3-retrained-2026-09-21",
+  "feature_commit": "b6072b1f9bf144e35ad74370265ccae30e95a626",
+  "base_checkpoint": "artifacts/training_v3_long/best_model.pt",
+  "base_checkpoint_sha256": "02b3a7e1ac936bd7acce2d46be37dedc2d8d59a07b9940b0beea5623d977c729",
+  "training": {
+    "continuation_epochs": 20,
+    "best_epoch": 17,
+    "best_validation_top1": 0.32728461664214487,
+    "best_validation_top3": 0.5134870034330554,
+    "total_seconds": 1963.57,
+    "seed": 20260921
+  },
+  "frozen_test": {
+    "records": 6780,
+    "top1": 0.3005899705014749,
+    "top3": 0.47699115044247786,
+    "mrr": 0.43440485303704235,
+    "rule_filtered_legality": 1.0
+  },
+  "sha256": {
+    "best_model.pt": "850a0cb50723f461267c374d4107eac364c5a45e308d3e5975599dcd98f532ab",
+    "latest_model.pt": "5d825ae260a451eb29b7bb25491da3e4626737a3886878f2251a0b4534f375b1",
+    "metrics.csv": "caad27633e8005ff93b13e22f94bcc1b9f2a84c44cdbed1775f0926a4cdf4805",
+    "environment.json": "6e0e908ffb004e292699b2a8fddebef3d4e50801fbda4806a976c9e7b7620c52",
+    "training_summary.json": "16aaaabc69ea5ebc3a05ea46aaeea4db0262fbebb4f21d4310e2326e0111874e",
+    "evaluation.json": "a26c8be26426a250ad507bf9ed6cf41ddbda7332ecebe16b94d51b4c87185581"
+  },
+  "data_sha256": {
+    "train.jsonl": "b606de8b232c0db2c56e4a3521ab8c8ef750a0c6c9315c8422720aadd2dd0988",
+    "validation.jsonl": "f31eedd20772920f4aa9ea11957a9a85f4919aa0bb1303d18bae291d5e67ed9f"
+  }
+}
