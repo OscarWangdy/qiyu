@@ -1,2 +1,7 @@
 --index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
 torch==2.8.0
+Pillow==11.3.0
+numpy==2.0.2
+onnxruntime==1.19.2
+opencv-python-headless==4.10.0.84

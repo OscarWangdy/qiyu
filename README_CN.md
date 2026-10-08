@@ -7,7 +7,8 @@
 ## 新增能力
 
 - 接入 DeepSeek `deepseek-flash`：支持自由对话，且每轮传入当前局面、行棋方和合法着作为事实约束。
-- 支持上传 JPEG、PNG、GIF 或 WebP 残局图片，识别为可校验 FEN，确认后再导入棋盘。
+- 支持上传 JPEG、PNG、GIF 或 WebP 残局图片；中国象棋专用 ONNX 模型会先定位四角、透视校正，再分类90个交叉点。
+- 识图结果先进入可编辑草稿棋盘，可逐格修正；正式导入时再检查双方将帅和棋子数量。
 - 未配置 DeepSeek 时，“棋语助教”仍可离线回答推荐走法、决策原因、规则和热图问题。
 - 热图同时使用颜色深浅和前五位百分比表示关注度。
 - 使用者可选择执红或执黑；执黑时 AI 执红先行，棋盘自动旋转。
@@ -21,6 +22,7 @@
 - `artifacts/training_v4/best_model.pt`：上一版权重，可用于回退和对比。
 - `artifacts/training_v3_long/best_model.pt`：续训前的 v3 基线权重。
 - `artifacts/master_data_v3/opening_book.json`：第三版使用的职业开局库。
+- `artifacts/vision/*.onnx`：真实场景棋盘四角定位与90点分类模型。
 - `artifacts/evaluation_v3_long/evaluation.json`：第三版冻结测试评估结果。
 - `qiyu/agent.py`、`qiyu/model.py`、`qiyu/server.py`：支持 v3 搜索字段和新版 PyTorch 加载的关键代码。
 - `web/index.html`：能显示搜索深度、节点数、耗时的网页。
@@ -49,7 +51,7 @@ DEEPSEEK_API_KEY=your_key_here
 
 Render 等公网部署不提供网页存 Key，请在服务器环境变量中配置 `DEEPSEEK_API_KEY`。可选变量为 `DEEPSEEK_BASE_URL`、`DEEPSEEK_TEXT_MODEL`、`DEEPSEEK_VISION_MODEL`。实现依据 [DeepSeek 对话补全文档](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion/) 和 [图像理解文档](https://api-docs.deepseek.com/zh-cn/guides/vision/)。
 
-安全边界：DeepSeek 只负责意图理解、视觉识别和语言表达；最终走法仍由本地 Transformer、搜索和规则层约束。
+安全边界：DeepSeek 负责意图理解和语言表达；专用 ONNX 模型负责图片定位与分类，DeepSeek 仅作识图失败时的草稿兜底。最终走法仍由本地 Transformer、搜索和规则层约束。专用视觉模型的来源与许可见 `THIRD_PARTY_NOTICES.md`。
 
 ## 发布公网试玩地址
 
@@ -64,7 +66,7 @@ Render 等公网部署不提供网页存 Key，请在服务器环境变量中配
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install torch numpy cchess
+python -m pip install -r requirements_v3_runtime.txt
 ```
 
 ## 新训练与棋力评估

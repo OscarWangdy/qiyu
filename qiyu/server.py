@@ -35,6 +35,7 @@ from .rules import (
     opponent,
     winner,
 )
+from .vision import SpecializedVisionError, XiangqiVisionRecognizer
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -315,10 +316,41 @@ class Game:
                 "usage": result.get("usage", {}),
             }
 
-    def recognize_position(self, data_url: str, client: DeepSeekClient) -> Dict:
-        image_bytes, mime_type = parse_data_url(data_url)
+    def recognize_position(
+        self,
+        data_url: str,
+        client: Optional[DeepSeekClient],
+        variants: Optional[list] = None,
+        vision: Optional[XiangqiVisionRecognizer] = None,
+    ) -> Dict:
+        parsed_variants = []
+        if variants:
+            if not isinstance(variants, list) or len(variants) > 4:
+                raise ValueError("方向校正图数量无效")
+            for index, item in enumerate(variants):
+                if not isinstance(item, dict):
+                    raise ValueError("方向校正图格式无效")
+                label = str(item.get("label", f"方向 {index + 1}"))[:40]
+                variant_bytes, variant_type = parse_data_url(str(item.get("image", "")))
+                parsed_variants.append((label, variant_bytes, variant_type))
+            image_bytes, mime_type = parsed_variants[0][1], parsed_variants[0][2]
+        else:
+            image_bytes, mime_type = parse_data_url(data_url)
         with self.language_lock:
-            return client.recognize_position(image_bytes, mime_type)
+            if vision is not None:
+                try:
+                    return vision.recognize(image_bytes)
+                except SpecializedVisionError:
+                    # 专用模型未能定位棋盘时，仍可使用 DeepSeek 生成可编辑草稿。
+                    if client is None:
+                        raise
+            if client is None:
+                raise ValueError("识图引擎尚未就绪")
+            return client.recognize_position(
+                image_bytes,
+                mime_type,
+                image_variants=parsed_variants or None,
+            )
 
     def load_position(self, fen: str, side_override: Optional[str] = None) -> Dict:
         board, fen_side = parse_xiangqi_fen(fen)
@@ -342,6 +374,7 @@ class Game:
 
 AGENT: Optional[QiYuAgent] = None
 DEEPSEEK: Optional[DeepSeekClient] = None
+VISION: Optional[XiangqiVisionRecognizer] = None
 GAMES: Dict[str, tuple[Game, float]] = {}
 GAMES_LOCK = threading.Lock()
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
@@ -442,6 +475,10 @@ class Handler(SimpleHTTPRequestHandler):
                         **deepseek_status(),
                         "local_setup": self._is_local_request(),
                     },
+                    "vision": VISION.status if VISION else {
+                        "ready": False,
+                        "engine": "deepseek-fallback" if DEEPSEEK else "unavailable",
+                    },
                 }
             )
             return
@@ -477,7 +514,12 @@ class Handler(SimpleHTTPRequestHandler):
             elif self.path == "/api/chat":
                 self._json(game.chat(str(payload.get("question", "")), DEEPSEEK))
             elif self.path == "/api/vision":
-                self._json(game.recognize_position(str(payload.get("image", "")), require_deepseek()))
+                self._json(game.recognize_position(
+                    str(payload.get("image", "")),
+                    DEEPSEEK,
+                    payload.get("images"),
+                    VISION,
+                ))
             elif self.path == "/api/position":
                 self._json(game.load_position(str(payload.get("fen", "")), payload.get("side")))
             else:
@@ -486,13 +528,15 @@ class Handler(SimpleHTTPRequestHandler):
             self._json({"error": str(error)}, 400)
         except DeepSeekError as error:
             self._json({"error": str(error)}, 502)
+        except SpecializedVisionError as error:
+            self._json({"error": str(error)}, 502)
 
     def log_message(self, format, *args):
         print("[web] " + format % args)
 
 
 def main() -> None:
-    global AGENT, DEEPSEEK
+    global AGENT, DEEPSEEK, VISION
     parser = argparse.ArgumentParser(description="启动棋语智能体演示")
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--opening-book", type=Path, default=DEFAULT_OPENING_BOOK)
@@ -503,6 +547,10 @@ def main() -> None:
     AGENT = QiYuAgent(args.checkpoint, args.opening_book)
     deepseek_config = DeepSeekConfig.from_env()
     DEEPSEEK = DeepSeekClient(deepseek_config) if deepseek_config else None
+    try:
+        VISION = XiangqiVisionRecognizer()
+    except (FileNotFoundError, OSError, RuntimeError):
+        VISION = None
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"棋语演示已启动：http://{args.host}:{args.port}")
     print(f"模型：{'已加载' if AGENT.ready else '未找到权重，使用教师策略'}")

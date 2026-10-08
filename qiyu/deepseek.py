@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 from dataclasses import dataclass
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,8 @@ import socket
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 from .rules import BLACK, RED, board_to_string
 
@@ -24,6 +27,15 @@ ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 PIECES = set("rheakcpRHEAKCP.")
 PIECE_LIMITS = {"K": 1, "A": 2, "E": 2, "H": 2, "R": 2, "C": 2, "P": 5}
+PIECE_TYPES = {
+    "rook": "r", "chariot": "r", "车": "r", "車": "r", "俥": "r",
+    "horse": "h", "knight": "h", "马": "h", "馬": "h", "傌": "h",
+    "elephant": "e", "bishop": "e", "象": "e", "相": "e",
+    "advisor": "a", "guard": "a", "士": "a", "仕": "a",
+    "king": "k", "general": "k", "将": "k", "將": "k", "帅": "k", "帥": "k",
+    "cannon": "c", "炮": "c", "砲": "c",
+    "pawn": "p", "soldier": "p", "卒": "p", "兵": "p",
+}
 
 
 class DeepSeekError(RuntimeError):
@@ -144,24 +156,68 @@ class DeepSeekClient:
         })
         return {"content": content, "usage": usage, "model": self.config.text_model}
 
-    def recognize_position(self, image_bytes: bytes, mime_type: str) -> Dict:
-        if mime_type not in ALLOWED_IMAGE_TYPES:
-            raise ValueError("仅支持 JPEG、PNG、GIF 或 WebP 图片")
-        if not image_bytes:
-            raise ValueError("图片内容为空")
-        if len(image_bytes) > MAX_IMAGE_BYTES:
-            raise ValueError("图片不能超过 8 MiB")
-        encoded = base64.b64encode(image_bytes).decode("ascii")
+    def recognize_position(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        image_variants: Optional[Sequence[Tuple[str, bytes, str]]] = None,
+    ) -> Dict:
+        media = list(image_variants or [("原图", image_bytes, mime_type)])
+        if not media or len(media) > 4:
+            raise ValueError("识图请求必须包含 1 到 4 张方向校正图")
+        for _, variant_bytes, variant_type in media:
+            if variant_type not in ALLOWED_IMAGE_TYPES:
+                raise ValueError("仅支持 JPEG、PNG、GIF 或 WebP 图片")
+            if not variant_bytes:
+                raise ValueError("图片内容为空")
+            if len(variant_bytes) > MAX_IMAGE_BYTES:
+                raise ValueError("单张图片不能超过 8 MiB")
+
+        # 对同一张图同时提供多个旋转版本会使视觉模型重复计数。
+        # 只使用用户原图，由模型在单一坐标系中判定方向。
+        media = media[:1]
         prompt = (
-            "识别这张中国象棋残局图。只输出 JSON 对象，不要 Markdown。"
-            "字段必须为 fen、side_to_move、confidence、orientation、notes。"
-            "fen 必须是 10 行×9 列的中国象棋 FEN，图像上方为第 0 行，下方为第 9 行；"
+            "你是中国象棋棋盘视觉测量器，不是残局推理器。"
+            "先定位主棋盘四角和 9 列×10 行的90个网格交叉点。"
+            "对每一枚圆形棋子，先以棋子圆心找到最近的交叉点，再读颜色和汉字；"
+            "最后才把坐标标准化为黑方在上、红方在下的 row=0..9、col=0..8。"
+            "只认主棋盘最外层网格线以内、圆心贴近交叉点的棋子；"
+            "必须忽略红框外、棋盘旁和盒子里堆放的已吃棋子。"
+            "完全禁止根据常见阵型、棋理或‘双方应各有一将’补棋、移棋、改色。图中没有帅或将就如实缺失。"
+            "逐枚检查后写入 pieces；同一格最多一子。"
+            "type 只能是 rook、horse、elephant、advisor、king、cannon、pawn，color 只能是 red 或 black。"
+            "同时输出 grid_corners、fen、pieces、side_to_move、confidence、orientation、notes 七个字段，只输出 JSON 对象。"
+            "grid_corners 是原图像素坐标，按标准化后的 top_left、top_right、bottom_right、bottom_left 输出，"
+            "例如 {\"top_left\":[70,50],\"top_right\":[410,50],\"bottom_right\":[410,470],\"bottom_left\":[70,470]}。"
+            "pieces 中每枚子都要带所选图片上的像素圆心 x、y，用它自查是否映射到最近交叉点。"
+            "pieces 示例：[{\"x\":210,\"y\":69,\"row\":0,\"col\":4,\"color\":\"black\",\"type\":\"king\",\"glyph\":\"将\",\"confidence\":0.95}]。"
+            "fen 必须是同一 pieces 列表对应的 10 行×9 列中国象棋 FEN；"
             "黑方用 rheakcp，红方用 RHEAKCP，空格用数字压缩。"
-            "如果棋盘在图中是旋转的，先旋转到黑方在上、红方在下的标准方向。"
             "side_to_move 只能是 red 或 black；无法判断时按图上标注，仍无标注则填 red 并在 notes 说明。"
             "confidence 为 0 到 1 的数字；orientation 用简短中文说明红黑方向；"
-            "notes 是中文字符串数组，列出遮挡、模糊或无法确定的棋子。"
+            "notes 是中文字符串数组，列出遮挡、模糊、方向选择或无法确定的棋子。"
+            "输出前逐项核对：圆心是否在主棋盘内、最近网格行列、红黑颜色、棋子汉字以及 pieces 与 fen 完全一致。"
         )
+
+        def image_content(
+            instruction: str,
+            attachments: Optional[Sequence[Tuple[str, bytes, str]]] = None,
+        ) -> List[Dict]:
+            parts: List[Dict] = [{"type": "text", "text": instruction}]
+            for label, variant_bytes, variant_type in attachments or media:
+                encoded = base64.b64encode(variant_bytes).decode("ascii")
+                parts.extend([
+                    {"type": "text", "text": f"【{label}】"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{variant_type};base64,{encoded}",
+                            "detail": "original",
+                        },
+                    },
+                ])
+            return parts
+
         content, usage = self._completion({
             "model": self.config.vision_model,
             # Flash 默认开启思考模式；残局图可能把较小的输出预算全部
@@ -170,20 +226,88 @@ class DeepSeekClient:
             "thinking": {"type": "disabled"},
             "messages": [{
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime_type};base64,{encoded}", "detail": "original"},
-                    },
-                ],
+                "content": image_content(prompt),
             }],
             "temperature": 0.1,
-            "max_tokens": 1000,
+            "max_tokens": 1800,
             "response_format": {"type": "json_object"},
         })
+
+        first_content = content
+        first_parsed = parse_json_object(first_content)
+        crop_media = build_piece_crops(image_bytes, first_parsed)
+        review_prompt = (
+            "你是第二位独立复核员。重新逐格观察同一张原图，不要盲从初稿。"
+            "重点纠正：旋转方向、相邻行列错位、书法体误判，以及把棋盘外散子纳入局面。"
+            "用每枚子的像素圆心复查最近交叉点。只记录主棋盘网格交叉点上确实可见的棋子，"
+            "不按规则臆造或移动棋子；不得为了凑齐将帅而新增棋子。"
+            "原图后如果附有‘候选棋子特写’，它们是按初稿圆心自动裁切和放大的，"
+            "只用于核对该坐标的颜色与汉字，不得将同一特写重复计数。"
+            "按与初稿完全相同的七字段 JSON 结构返回修正版，并保证 pieces 与 fen 一致。\n"
+            f"【待复核初稿】{first_content[:6000]}"
+        )
+        review_content, review_usage = self._completion({
+            "model": self.config.vision_model,
+            "thinking": {"type": "disabled"},
+            "messages": [{
+                "role": "user",
+                "content": image_content(review_prompt, [media[0], *crop_media]),
+            }],
+            "temperature": 0.1,
+            "max_tokens": 1800,
+            "response_format": {"type": "json_object"},
+        })
+        review_parsed = parse_json_object(review_content)
+        first_count = len(first_parsed.get("pieces", [])) if isinstance(first_parsed.get("pieces"), list) else 0
+        review_count = len(review_parsed.get("pieces", [])) if isinstance(review_parsed.get("pieces"), list) else 0
+        # 复核的目标是纠错，不是把大部分已检出棋子删掉。
+        content = first_content if first_count >= 3 and review_count < first_count * 0.7 else review_content
+        usage = {"first_pass": usage, "review_pass": review_usage}
+
         parsed = parse_json_object(content)
-        board, fen_side = parse_xiangqi_fen(str(parsed.get("fen", "")))
+        board: Optional[List[str]] = None
+        parser_notes: List[str] = []
+        pieces = parsed.get("pieces")
+        if isinstance(pieces, list):
+            candidate = ["."] * 90
+            candidate_confidence = [-1.0] * 90
+            for item in pieces:
+                if not isinstance(item, dict):
+                    parser_notes.append("已忽略一条格式无效的棋子候选。")
+                    continue
+                try:
+                    row, col = int(item["row"]), int(item["col"])
+                except (KeyError, TypeError, ValueError):
+                    parser_notes.append("已忽略一枚缺少有效行列的棋子候选。")
+                    continue
+                if not (0 <= row < 10 and 0 <= col < 9):
+                    parser_notes.append(f"已忽略坐标越界的棋子（{row}, {col}）。")
+                    continue
+                piece_type = PIECE_TYPES.get(str(item.get("type", "")).strip().lower())
+                if not piece_type:
+                    piece_type = PIECE_TYPES.get(str(item.get("glyph", "")).strip())
+                color = str(item.get("color", "")).strip().lower()
+                if not piece_type or color not in {RED, BLACK}:
+                    parser_notes.append(f"已忽略 {row + 1} 行 {col + 1} 列的未知棋子候选。")
+                    continue
+                index = row * 9 + col
+                try:
+                    item_confidence = max(0.0, min(1.0, float(item.get("confidence", 0.5))))
+                except (TypeError, ValueError):
+                    item_confidence = 0.5
+                symbol = piece_type.upper() if color == RED else piece_type
+                if candidate[index] != ".":
+                    parser_notes.append(f"{row + 1} 行 {col + 1} 列出现多枚候选，已暂留高置信度的一枚，请手动核对。")
+                    if item_confidence <= candidate_confidence[index]:
+                        continue
+                candidate[index] = symbol
+                candidate_confidence[index] = item_confidence
+            validate_detected_position(candidate)
+            board = candidate
+
+        fen_side: Optional[str] = None
+        if board is None:
+            board, fen_side = parse_xiangqi_fen(str(parsed.get("fen", "")))
         requested_side = str(parsed.get("side_to_move", "")).lower()
         side = requested_side if requested_side in {RED, BLACK} else fen_side
         if side not in {RED, BLACK}:
@@ -196,9 +320,18 @@ class DeepSeekClient:
         notes = parsed.get("notes", [])
         if not isinstance(notes, list):
             notes = [str(notes)]
-        notes = [str(item)[:240] for item in notes[:8]]
+        notes = [str(item)[:240] for item in notes[:8]] + parser_notes[:8]
+        missing_kings = []
+        if board.count("K") != 1:
+            missing_kings.append("红帅")
+        if board.count("k") != 1:
+            missing_kings.append("黑将")
+        if missing_kings:
+            missing_text = "和".join(missing_kings)
+            notes.append(f"识别草稿未找到{missing_text}；请在校对棋盘中补充后再应用。")
+            confidence = min(confidence, 0.65 if len(missing_kings) == 1 else 0.45)
         return {
-            "fen": board_to_fen(board, side),
+            "fen": board_to_fen(board, side, require_kings=False),
             "board": board,
             "side": side,
             "confidence": round(confidence, 3),
@@ -206,6 +339,7 @@ class DeepSeekClient:
             "notes": notes,
             "usage": usage,
             "model": self.config.vision_model,
+            "reviewed": True,
         }
 
 
@@ -227,6 +361,63 @@ def parse_json_object(text: str) -> Dict:
     if not isinstance(value, dict):
         raise DeepSeekError("图片识别结果必须是 JSON 对象。")
     return value
+
+
+def build_piece_crops(image_bytes: bytes, parsed: Dict) -> List[Tuple[str, bytes, str]]:
+    """根据第一遍的圆心坐标裁出特写，让复核模型看清低分辨率汉字。"""
+    pieces = parsed.get("pieces")
+    if not isinstance(pieces, list):
+        return []
+    try:
+        image = ImageOps.exif_transpose(Image.open(BytesIO(image_bytes))).convert("RGB")
+    except (OSError, ValueError):
+        return []
+
+    corners = parsed.get("grid_corners", {})
+    points = []
+    if isinstance(corners, dict):
+        for name in ("top_left", "top_right", "bottom_right", "bottom_left"):
+            point = corners.get(name)
+            if isinstance(point, list) and len(point) == 2:
+                try:
+                    points.append((float(point[0]), float(point[1])))
+                except (TypeError, ValueError):
+                    points = []
+                    break
+    if len(points) == 4:
+        width = (abs(points[1][0] - points[0][0]) + abs(points[2][0] - points[3][0])) / 2
+        height = (abs(points[3][1] - points[0][1]) + abs(points[2][1] - points[1][1])) / 2
+        radius = int(max(20, min(70, max(width / 8, height / 9) * 0.72)))
+    else:
+        radius = int(max(20, min(60, min(image.size) / 13)))
+
+    crops: List[Tuple[str, bytes, str]] = []
+    seen_centers = set()
+    for item in pieces:
+        if not isinstance(item, dict):
+            continue
+        try:
+            x, y = round(float(item["x"])), round(float(item["y"]))
+            row, col = int(item["row"]), int(item["col"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        center_key = (x // 4, y // 4)
+        if center_key in seen_centers or not (0 <= x < image.width and 0 <= y < image.height):
+            continue
+        seen_centers.add(center_key)
+        box = (
+            max(0, x - radius), max(0, y - radius),
+            min(image.width, x + radius), min(image.height, y + radius),
+        )
+        crop = image.crop(box).resize((256, 256), Image.Resampling.LANCZOS)
+        crop = ImageEnhance.Contrast(crop).enhance(1.12)
+        crop = crop.filter(ImageFilter.UnsharpMask(radius=1.4, percent=130, threshold=3))
+        output = BytesIO()
+        crop.save(output, format="JPEG", quality=92)
+        crops.append((f"候选棋子特写：第 {row + 1} 行第 {col + 1} 列", output.getvalue(), "image/jpeg"))
+        if len(crops) >= 12:
+            break
+    return crops
 
 
 def parse_data_url(data_url: str) -> Tuple[bytes, str]:
@@ -276,17 +467,22 @@ def parse_xiangqi_fen(fen: str) -> Tuple[List[str], Optional[str]]:
 
 
 def validate_position(board: Sequence[str]) -> None:
-    if len(board) != 90 or any(piece not in PIECES for piece in board):
-        raise ValueError("残局必须是由合法棋子组成的 90 格局面")
+    validate_detected_position(board)
     if board.count("K") != 1 or board.count("k") != 1:
         raise ValueError("残局必须各有一枚红帅和黑将")
+
+
+def validate_detected_position(board: Sequence[str]) -> None:
+    """校验视觉草稿，不强迫模型臆造未拍到的将帅。"""
+    if len(board) != 90 or any(piece not in PIECES for piece in board):
+        raise ValueError("残局必须是由合法棋子组成的 90 格局面")
     for piece, limit in PIECE_LIMITS.items():
         if board.count(piece) > limit or board.count(piece.lower()) > limit:
             raise ValueError(f"残局中{piece}类棋子数量超出规则上限")
 
 
-def board_to_fen(board: Sequence[str], side: str) -> str:
-    validate_position(board)
+def board_to_fen(board: Sequence[str], side: str, require_kings: bool = True) -> str:
+    (validate_position if require_kings else validate_detected_position)(board)
     rows: List[str] = []
     for row_index in range(10):
         text, empty = "", 0

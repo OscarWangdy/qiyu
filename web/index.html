@@ -56,6 +56,16 @@
     .vision-picker { display:block; margin-top:8px; padding:10px; border:1px dashed #b99d6d; border-radius:5px; background:#fffdf7; font:13px system-ui; }
     #imagePreview { width:100%; max-height:240px; object-fit:contain; display:none; margin-top:10px; border-radius:5px; background:#1d241f0d; }
     .vision-result { display:none; margin-top:10px; padding:11px; border-left:3px solid var(--gold); background:#fffdf7; white-space:pre-wrap; font:12px/1.7 system-ui; overflow-wrap:anywhere; }
+    .position-editor { display:none; margin-top:12px; padding:12px; border:1px solid #d7c5a4; border-radius:5px; background:#fffdf7; }
+    .position-editor h3 { margin:0 0 8px; color:var(--jade); font:650 13px/1.4 system-ui; }
+    .piece-palette { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:9px; }
+    .piece-palette button { min-width:34px; margin:0; padding:6px 8px; background:#efe2c9; color:#222; font:700 16px serif; }
+    .piece-palette button.red-piece { color:#a8322b; }
+    .piece-palette button.active { outline:2px solid var(--gold); background:var(--jade); color:#fff; }
+    .draft-board { display:grid; grid-template-columns:repeat(9,1fr); width:min(100%,390px); margin:auto; border-left:1px solid #86613d; border-top:1px solid #86613d; }
+    .draft-cell { aspect-ratio:1; margin:0; padding:0; border-radius:0; border-right:1px solid #86613d; border-bottom:1px solid #86613d; background:#dfb676; color:#202820; font:700 clamp(13px,2.6vw,21px)/1 serif; }
+    .draft-cell.red-piece { color:#a8322b; }
+    .draft-cell:hover { filter:brightness(1.04); }
     .side-select { max-width:125px; }
     #toast { min-height:20px; color:var(--red); font:13px system-ui; transition:color .18s ease; }
     #toast.thinking { color:var(--jade); }
@@ -126,7 +136,12 @@
           <button id="applyPosition" class="secondary" disabled>应用到棋盘</button>
         </div>
         <div id="visionResult" class="vision-result"></div>
-        <div class="fine-print">识别结果不会自动覆盖棋盘。请先阅读疑点，应用时后端仍会检查双方将帅和棋子数量。</div>
+        <div id="positionEditor" class="position-editor">
+          <h3>逐格校对（先选棋子，再点格子）</h3>
+          <div id="piecePalette" class="piece-palette"></div>
+          <div id="draftBoard" class="draft-board" aria-label="待导入残局校对棋盘"></div>
+        </div>
+        <div class="fine-print">系统会先定位棋子圆心，再独立二次复核。识别结果不会自动覆盖棋盘；仍有误差时，可在上方逐格修正后再应用。</div>
       </section>
       <section class="card">
         <h2>决策解释</h2>
@@ -165,13 +180,59 @@
     const motionPreference=window.matchMedia('(prefers-reduced-motion: reduce)');
     let reduceMotion=motionPreference.matches;
     let state=null,displayBoard=null,selected=null,busy=false,lastMoveVisual=null,activeVisual=null;
-    let currentImageData='',recognizedFen='',deepseekReady=false;
+    let currentImageData='',recognizedFen='',recognizedBoard=null,deepseekReady=false,visionReady=false,selectedEditorPiece='.';
     const visualIndex=i=>state&&state.human_side==='black'?89-i:i;
     const boardIndex=(r,c)=>state&&state.human_side==='black'?89-(r*9+c):r*9+c;
     const xy=i=>{const visual=visualIndex(i);return {r:Math.floor(visual/9),c:visual%9,x:pad+(visual%9)*cw,y:pad+Math.floor(visual/9)*ch};};
     const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
     const eased=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
     const motionTime=ms=>reduceMotion?0:ms;
+
+    function boardToFen(board,side){
+      const rows=[];
+      for(let row=0;row<10;row++){
+        let encoded='',empty=0;
+        for(let col=0;col<9;col++){
+          const piece=board[row*9+col];
+          if(piece==='.'){empty++;continue;}
+          if(empty){encoded+=String(empty);empty=0;}
+          encoded+=piece;
+        }
+        if(empty)encoded+=String(empty);
+        rows.push(encoded);
+      }
+      return `${rows.join('/')} ${side==='black'?'b':'w'}`;
+    }
+
+    function updateRecognizedFen(){
+      if(recognizedBoard)recognizedFen=boardToFen(recognizedBoard,document.getElementById('recognizedSide').value);
+    }
+
+    function renderPositionEditor(){
+      const editor=document.getElementById('positionEditor'),draft=document.getElementById('draftBoard');
+      if(!recognizedBoard){editor.style.display='none';draft.replaceChildren();return;}
+      editor.style.display='block';draft.replaceChildren();
+      recognizedBoard.forEach((piece,index)=>{
+        const cell=document.createElement('button');cell.type='button';cell.className=`draft-cell ${piece!=='.'&&piece===piece.toUpperCase()?'red-piece':''}`;
+        cell.textContent=piece==='.'?'':glyph[piece];cell.title=`第 ${Math.floor(index/9)+1} 行，第 ${index%9+1} 列`;
+        cell.onclick=()=>{recognizedBoard[index]=selectedEditorPiece;updateRecognizedFen();renderPositionEditor();};
+        draft.appendChild(cell);
+      });
+    }
+
+    function initializePiecePalette(){
+      const palette=document.getElementById('piecePalette');
+      const names={'.':'空',K:'帥',A:'仕',E:'相',H:'馬',R:'車',C:'炮',P:'兵',k:'將',a:'士',e:'象',h:'馬',r:'車',c:'砲',p:'卒'};
+      ['.','K','A','E','H','R','C','P','k','a','e','h','r','c','p'].forEach(piece=>{
+        const button=document.createElement('button');button.type='button';button.dataset.editorPiece=piece;button.textContent=names[piece];
+        button.classList.toggle('red-piece',piece!=='.'&&piece===piece.toUpperCase());
+        button.classList.toggle('active',piece===selectedEditorPiece);
+        button.onclick=()=>{selectedEditorPiece=piece;palette.querySelectorAll('button').forEach(item=>item.classList.toggle('active',item===button));};
+        palette.appendChild(button);
+      });
+    }
+
+    initializePiecePalette();
 
     if(motionPreference.addEventListener){
       motionPreference.addEventListener('change',event=>{reduceMotion=event.matches;draw();});
@@ -459,18 +520,19 @@
       finally{setBusy(false);draw();}
     };
 
-    function renderDeepseekStatus(info){
+    function renderDeepseekStatus(info,vision){
       deepseekReady=Boolean(info&&info.configured);
-      document.getElementById('deepseekStatus').textContent=deepseekReady?'已连接，自由对话与视觉可用':'未配置，对话使用本地助教';
+      if(vision)visionReady=Boolean(vision.ready);
+      document.getElementById('deepseekStatus').textContent=deepseekReady?'已连接，自由对话可用':'未配置，对话使用本地助教';
       document.getElementById('deepseekModel').textContent=info?info.text_model:'';
       document.getElementById('apiSetup').style.display=!deepseekReady&&info&&info.local_setup?'block':'none';
       document.getElementById('remoteSetupHint').style.display=!deepseekReady&&info&&!info.local_setup?'block':'none';
-      recognizeButton.disabled=!deepseekReady||!currentImageData;
+      recognizeButton.disabled=!(visionReady||deepseekReady)||!currentImageData;
     }
 
     async function refreshHealth(){
       const health=await apiRequest('/api/health');
-      renderDeepseekStatus(health.deepseek||{});
+      renderDeepseekStatus(health.deepseek||{},health.vision||{});
     }
 
     document.getElementById('saveApiKey').onclick=async()=>{
@@ -479,14 +541,14 @@
       const button=document.getElementById('saveApiKey');button.disabled=true;setToast('正在保存本机配置…',true);
       try{
         const result=await apiRequest('/api/settings/deepseek',{api_key:apiKey});
-        field.value='';renderDeepseekStatus(result.deepseek);setToast('DeepSeek 已连接。可以自由对话或识别残局图片。');
+        field.value='';renderDeepseekStatus(result.deepseek);setToast('DeepSeek 已连接，自由对话可用。');
       }catch(error){setToast(error.message);}
       finally{button.disabled=false;}
     };
 
     imageInput.addEventListener('change',()=>{
       const file=imageInput.files&&imageInput.files[0];
-      currentImageData='';recognizedFen='';applyPositionButton.disabled=true;
+      currentImageData='';recognizedFen='';recognizedBoard=null;renderPositionEditor();applyPositionButton.disabled=true;
       const result=document.getElementById('visionResult');result.style.display='none';result.textContent='';
       if(!file)return;
       if(file.size>8*1024*1024){setToast('图片不能超过 8 MiB。');imageInput.value='';return;}
@@ -494,28 +556,33 @@
       reader.onload=()=>{
         currentImageData=String(reader.result||'');
         const preview=document.getElementById('imagePreview');preview.src=currentImageData;preview.style.display='block';
-        recognizeButton.disabled=!deepseekReady;setToast(deepseekReady?'':'识别图片前请先配置 DeepSeek API Key。');
+        const recognitionReady=visionReady||deepseekReady;
+        recognizeButton.disabled=!recognitionReady;setToast(recognitionReady?'':'识图引擎尚未就绪。');
       };
       reader.onerror=()=>setToast('无法读取这张图片。');
       reader.readAsDataURL(file);
     });
 
     recognizeButton.onclick=async()=>{
-      if(!currentImageData||!deepseekReady)return;
-      recognizeButton.disabled=true;applyPositionButton.disabled=true;setToast('DeepSeek 正在识别棋子与朝向…',true);
+      if(!currentImageData||!(visionReady||deepseekReady))return;
+      recognizeButton.disabled=true;applyPositionButton.disabled=true;setToast('正在定位棋子并进行二次复核…',true);
       try{
         const value=await apiRequest('/api/vision',{image:currentImageData});
-        recognizedFen=value.fen;document.getElementById('recognizedSide').value=value.side;
+        recognizedBoard=Array.isArray(value.board)&&value.board.length===90?value.board.slice():null;
+        document.getElementById('recognizedSide').value=value.side;updateRecognizedFen();renderPositionEditor();
         const result=document.getElementById('visionResult');
         const notes=value.notes&&value.notes.length?`\n需核对：${value.notes.join('；')}`:'\n未标记额外疑点。';
-        result.textContent=`识别置信度：${Math.round(value.confidence*100)}%\n方向：${value.orientation}\nFEN：${value.fen}${notes}`;
-        result.style.display='block';applyPositionButton.disabled=false;setToast('识别完成。请先阅读疑点，再应用到棋盘。');
+        result.textContent=`识图引擎：${value.model||'未知'}\n双阶段复核：${value.reviewed?'已完成':'未启用'}\n识别置信度：${Math.round(value.confidence*100)}%\n方向：${value.orientation}\nFEN：${recognizedFen||value.fen}${notes}`;
+        result.style.display='block';applyPositionButton.disabled=!recognizedBoard;setToast('识别完成。请在校对棋盘中修正错漏，再应用。');
       }catch(error){setToast(error.message);}
-      finally{recognizeButton.disabled=!deepseekReady||!currentImageData;}
+      finally{recognizeButton.disabled=!(visionReady||deepseekReady)||!currentImageData;}
     };
+
+    document.getElementById('recognizedSide').addEventListener('change',updateRecognizedFen);
 
     applyPositionButton.onclick=async()=>{
       if(!recognizedFen||busy)return;
+      updateRecognizedFen();
       setBusy(true);applyPositionButton.disabled=true;setToast('正在校验并导入残局…',true);
       try{
         const payload=await api('/api/position',{fen:recognizedFen,side:document.getElementById('recognizedSide').value});

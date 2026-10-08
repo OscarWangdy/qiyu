@@ -59,6 +59,46 @@ class DeepSeekClientTests(unittest.TestCase):
         self.assertEqual(result["confidence"], 0.87)
         self.assertEqual(len(result["board"]), 90)
 
+    def test_vision_draft_does_not_invent_a_missing_king(self):
+        def transport(url, payload, headers, timeout):
+            return {
+                "choices": [{"message": {"content": (
+                    '{"fen":"4k4/5R3/9/9/9/9/9/9/9/9 w",'
+                    '"pieces":[{"row":0,"col":4,"color":"black","type":"king","glyph":"将"},'
+                    '{"row":1,"col":5,"color":"red","type":"rook","glyph":"车"}],'
+                    '"side_to_move":"red","confidence":0.98,'
+                    '"orientation":"黑上红下","notes":[]}'
+                )}}],
+                "usage": {},
+            }
+
+        client = DeepSeekClient(DeepSeekConfig(api_key="test-key-for-unit-tests"), transport)
+        result = client.recognize_position(b"image", "image/png")
+        self.assertEqual(result["board"].count("k"), 1)
+        self.assertEqual(result["board"].count("K"), 0)
+        self.assertLessEqual(result["confidence"], 0.65)
+        self.assertTrue(any("红帅" in note for note in result["notes"]))
+        with self.assertRaisesRegex(ValueError, "红帅和黑将"):
+            parse_xiangqi_fen(result["fen"])
+
+    def test_vision_draft_keeps_higher_confidence_on_coordinate_collision(self):
+        def transport(url, payload, headers, timeout):
+            return {
+                "choices": [{"message": {"content": (
+                    '{"pieces":['
+                    '{"row":0,"col":4,"color":"black","type":"king","confidence":0.99},'
+                    '{"row":1,"col":5,"color":"red","type":"rook","confidence":0.3},'
+                    '{"row":1,"col":5,"color":"red","type":"horse","confidence":0.9}],'
+                    '"side_to_move":"red","confidence":0.8,"orientation":"黑上红下","notes":[]}'
+                )}}],
+                "usage": {},
+            }
+
+        client = DeepSeekClient(DeepSeekConfig(api_key="test-key-for-unit-tests"), transport)
+        result = client.recognize_position(b"image", "image/png")
+        self.assertEqual(result["board"][14], "H")
+        self.assertTrue(any("多枚候选" in note for note in result["notes"]))
+
 
 class _FakeLanguageClient:
     def __init__(self):
