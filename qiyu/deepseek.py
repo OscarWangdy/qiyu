@@ -138,6 +138,7 @@ class DeepSeekClient:
         content, usage = self._completion({
             "model": self.config.text_model,
             "messages": list(messages),
+            "thinking": {"type": "disabled"},
             "temperature": 0.65,
             "max_tokens": 1200,
         })
@@ -163,6 +164,10 @@ class DeepSeekClient:
         )
         content, usage = self._completion({
             "model": self.config.vision_model,
+            # Flash 默认开启思考模式；残局图可能把较小的输出预算全部
+            # 消耗在 reasoning_content，最终 content 为空。结构化提取直接
+            # 使用非思考模式，既稳定又能减少延迟与费用。
+            "thinking": {"type": "disabled"},
             "messages": [{
                 "role": "user",
                 "content": [

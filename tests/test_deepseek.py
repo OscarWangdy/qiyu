@@ -42,6 +42,7 @@ class DeepSeekClientTests(unittest.TestCase):
         def transport(url, payload, headers, timeout):
             self.assertTrue(url.endswith("/chat/completions"))
             self.assertEqual(payload["model"], "deepseek-flash")
+            self.assertEqual(payload["thinking"], {"type": "disabled"})
             self.assertEqual(headers["Authorization"], "Bearer test-key-for-unit-tests")
             return {
                 "choices": [{"message": {"content": (
