@@ -1,0 +1,20 @@
+{
+  "python": "3.9.6",
+  "platform": "macOS-26.5.2-arm64-arm-64bit",
+  "torch": "2.8.0",
+  "device": "mps",
+  "seed": 20260921,
+  "parameters": 300241,
+  "train_records": 53885,
+  "validation_records": 6117,
+  "policy_loss": "sparse_legal_masked_joint",
+  "mirror_augmentation": true,
+  "color_rotation": true,
+  "continuation_epochs": 12,
+  "base_checkpoint": "artifacts/training_v4/best_model.pt",
+  "base_checkpoint_epoch": null,
+  "data_hashes": {
+    "train": "b606de8b232c0db2c56e4a3521ab8c8ef750a0c6c9315c8422720aadd2dd0988",
+    "validation": "f31eedd20772920f4aa9ea11957a9a85f4919aa0bb1303d18bae291d5e67ed9f"
+  }
+}

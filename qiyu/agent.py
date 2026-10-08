@@ -13,7 +13,7 @@ import torch
 from .encoding import encode_board
 from .heuristic import teacher_move
 from .heuristic import move_score
-from .model import QiYuTransformer, joint_move_log_probs, load_checkpoint
+from .model import QiYuTransformer, joint_move_scores, load_checkpoint
 from .rules import (
     Move,
     apply_unchecked,
@@ -99,7 +99,7 @@ class QiYuAgent:
 
         inputs = encode_board(board, side).unsqueeze(0).to(self.device)
         source_logits, destination_logits, _, attention = self.model(inputs, capture_attention=True)
-        joint_log_probs = joint_move_log_probs(source_logits, destination_logits)
+        joint_scores = joint_move_scores(source_logits, destination_logits)
         focus = attention[0].detach().cpu().tolist() if attention is not None else [0.0] * 90
 
         # 常见局面优先采用职业棋谱中出现次数最多的走法。
@@ -141,10 +141,9 @@ class QiYuAgent:
             )
 
         started = time.perf_counter()
-        ranked = self._rank_moves(board, side, legal, joint_log_probs[0])
+        ranked = self._rank_moves(board, side, legal, joint_scores[0])
         nodes = len(legal)
         scored_moves: List[Tuple[float, Move, float]] = []
-        alpha = -10_000.0
         for base_score, move, value in ranked[: self.search_config.candidate_limit]:
             if (time.perf_counter() - started) * 1000 >= self.search_config.time_limit_ms:
                 scored_moves.append((base_score, move, value))
@@ -155,12 +154,11 @@ class QiYuAgent:
                 opponent(side),
                 self.search_config.depth - 1,
                 -10_000.0,
-                -alpha,
+                10_000.0,
                 started,
             )
             nodes += child_nodes
             search_score = -score + base_score
-            alpha = max(alpha, search_score)
             scored_moves.append((search_score, move, value))
         for base_score, move, value in ranked[self.search_config.candidate_limit :]:
             scored_moves.append((base_score, move, value))
@@ -207,9 +205,9 @@ class QiYuAgent:
         board: Sequence[str],
         side: str,
         legal: Sequence[Move],
-        joint_log_probs: torch.Tensor,
+        joint_scores: torch.Tensor,
     ) -> List[Tuple[float, Move, float]]:
-        policy_scores = torch.stack([joint_log_probs[move.src, move.dst] for move in legal])
+        policy_scores = torch.stack([joint_scores[move.src, move.dst] for move in legal])
         policy_log_probs = torch.log_softmax(policy_scores, dim=0)
         next_boards = [apply_unchecked(board, move) for move in legal]
         next_inputs = torch.stack([encode_board(next_board, opponent(side)) for next_board in next_boards]).to(self.device)

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="420" viewBox="0 0 760 420">
+<rect width="760" height="420" fill="#fffaf0"/>
+<text x="58" y="30" font-family="sans-serif" font-size="19" font-weight="bold" fill="#173f35">棋语续训曲线</text>
+<line x1="58" y1="58.0" x2="702" y2="58.0" stroke="#ddd1ba"/><text x="48" y="62.0" text-anchor="end" font-size="12">3.0</text><line x1="58" y1="134.0" x2="702" y2="134.0" stroke="#ddd1ba"/><text x="48" y="138.0" text-anchor="end" font-size="12">2.2</text><line x1="58" y1="210.0" x2="702" y2="210.0" stroke="#ddd1ba"/><text x="48" y="214.0" text-anchor="end" font-size="12">1.5</text><line x1="58" y1="286.0" x2="702" y2="286.0" stroke="#ddd1ba"/><text x="48" y="290.0" text-anchor="end" font-size="12">0.7</text><line x1="58" y1="362.0" x2="702" y2="362.0" stroke="#ddd1ba"/><text x="48" y="366.0" text-anchor="end" font-size="12">0.0</text>
+<polyline points="58.0,80.5 116.5,82.1 175.1,83.4 233.6,83.6 292.2,84.8 350.7,85.5 409.3,85.9 467.8,86.1 526.4,86.7 584.9,86.9 643.5,86.9 702.0,87.1" fill="none" stroke="#a83b2f" stroke-width="3"/>
+<polyline points="58.0,95.9 116.5,96.7 175.1,96.0 233.6,96.5 292.2,97.0 350.7,97.6 409.3,97.6 467.8,97.8 526.4,98.0 584.9,98.5 643.5,98.5 702.0,98.5" fill="none" stroke="#173f35" stroke-width="3"/>
+<text x="58" y="405" font-family="sans-serif" font-size="12">训练损失（红）　验证损失（绿）　续训 1–12 轮</text>
+</svg>

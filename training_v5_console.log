@@ -1,0 +1,38 @@
+{
+  "python": "3.9.6",
+  "platform": "macOS-26.5.2-arm64-arm-64bit",
+  "torch": "2.8.0",
+  "device": "mps",
+  "seed": 20260921,
+  "parameters": 300241,
+  "train_records": 53885,
+  "validation_records": 6117,
+  "policy_loss": "sparse_legal_masked_joint",
+  "mirror_augmentation": true,
+  "color_rotation": true,
+  "continuation_epochs": 12,
+  "base_checkpoint": "artifacts/training_v4/best_model.pt",
+  "base_checkpoint_epoch": null,
+  "data_hashes": {
+    "train": "b606de8b232c0db2c56e4a3521ab8c8ef750a0c6c9315c8422720aadd2dd0988",
+    "validation": "f31eedd20772920f4aa9ea11957a9a85f4919aa0bb1303d18bae291d5e67ed9f"
+  }
+}
+{"continuation_epoch": 1, "train_loss": 2.7654631783792567, "validation_loss": 2.6144242386461687, "legal_top1_accuracy": 0.3263037436651954, "legal_top3_accuracy": 0.5097269903547491, "value_mae": 0.5833256167875935, "learning_rate": 5e-05, "elapsed_seconds": 146.97}
+{"continuation_epoch": 2, "train_loss": 2.75026146628656, "validation_loss": 2.6069609754826484, "legal_top1_accuracy": 0.3251593918587543, "legal_top3_accuracy": 0.5154487493869544, "value_mae": 0.5795067134822567, "learning_rate": 4.9088591906326194e-05, "elapsed_seconds": 269.51}
+{"continuation_epoch": 3, "train_loss": 2.7373064380370367, "validation_loss": 2.6131801011224423, "legal_top1_accuracy": 0.3166584927251921, "legal_top3_accuracy": 0.5097269903547491, "value_mae": 0.5819502107961049, "learning_rate": 4.6428204488701576e-05, "elapsed_seconds": 382.29}
+{"continuation_epoch": 4, "train_loss": 2.7354510153646294, "validation_loss": 2.6081196309227326, "legal_top1_accuracy": 0.31420631028281837, "legal_top3_accuracy": 0.5089095962072911, "value_mae": 0.580404946904216, "learning_rate": 4.223436651376892e-05, "elapsed_seconds": 488.95}
+{"continuation_epoch": 5, "train_loss": 2.723285011100539, "validation_loss": 2.6036265267448058, "legal_top1_accuracy": 0.3269576589831617, "legal_top3_accuracy": 0.5174104953408534, "value_mae": 0.582613723855286, "learning_rate": 3.6846837792542446e-05, "elapsed_seconds": 592.34}
+{"continuation_epoch": 6, "train_loss": 2.716224378378922, "validation_loss": 2.5981216156270275, "legal_top1_accuracy": 0.32646722249468696, "legal_top3_accuracy": 0.5144678764100049, "value_mae": 0.5818545679962672, "learning_rate": 3.070208386114892e-05, "elapsed_seconds": 695.97}
+{"continuation_epoch": 7, "train_loss": 2.7123562957356255, "validation_loss": 2.59747367468811, "legal_top1_accuracy": 0.31862023867909106, "legal_top3_accuracy": 0.5195357201242439, "value_mae": 0.5840024177167118, "learning_rate": 2.4297916138851086e-05, "elapsed_seconds": 799.04}
+{"continuation_epoch": 8, "train_loss": 2.7103905618240542, "validation_loss": 2.5953877481619907, "legal_top1_accuracy": 0.3184567598495995, "legal_top3_accuracy": 0.5108713421611901, "value_mae": 0.5835543938744823, "learning_rate": 1.815316220745756e-05, "elapsed_seconds": 902.44}
+{"continuation_epoch": 9, "train_loss": 2.704359779041995, "validation_loss": 2.5933616337129957, "legal_top1_accuracy": 0.31878371750858264, "legal_top3_accuracy": 0.5131600457740723, "value_mae": 0.5829990315869955, "learning_rate": 1.2765633486231087e-05, "elapsed_seconds": 1007.91}
+{"continuation_epoch": 10, "train_loss": 2.70298347140416, "validation_loss": 2.5888841774644114, "legal_top1_accuracy": 0.32842896844858593, "legal_top3_accuracy": 0.5170835376818702, "value_mae": 0.5823257193955912, "learning_rate": 8.571795511298421e-06, "elapsed_seconds": 1123.97}
+{"continuation_epoch": 11, "train_loss": 2.70248225838087, "validation_loss": 2.588693901236314, "legal_top1_accuracy": 0.32842896844858593, "legal_top3_accuracy": 0.5139774399215301, "value_mae": 0.5829396461064624, "learning_rate": 5.9114080936738125e-06, "elapsed_seconds": 1232.01}
+{"continuation_epoch": 12, "train_loss": 2.7004355408612857, "validation_loss": 2.5891426414061316, "legal_top1_accuracy": 0.3200915481445153, "legal_top3_accuracy": 0.5188818048062775, "value_mae": 0.5828823232175245, "learning_rate": 5e-06, "elapsed_seconds": 1340.68}
+{
+  "status": "completed",
+  "continuation_epochs": 12,
+  "best_legal_top1_accuracy": 0.32842896844858593,
+  "total_seconds": 1340.69
+}

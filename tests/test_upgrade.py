@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 import json
 import threading
 from http.server import ThreadingHTTPServer
@@ -7,6 +8,8 @@ from urllib.request import Request, urlopen
 import torch
 
 from qiyu.agent import Decision
+from qiyu.model import joint_move_scores
+from qiyu.retrain import PositionDataset
 from qiyu.rules import BLACK, RED, Move, initial_board, legal_moves, move_notation, parse_move
 from qiyu.server import Game, Handler
 import qiyu.server as server_module
@@ -43,6 +46,29 @@ class ChineseNotationTests(unittest.TestCase):
         board = initial_board()
         source, destination = parse_move("b9-c7")
         self.assertEqual(move_notation(board, Move(source, destination)), "马八进七")
+
+
+class TrainingConsistencyTests(unittest.TestCase):
+    def test_inference_scores_match_masked_training_objective(self):
+        source = torch.tensor([[2.0, 0.0]])
+        destination = torch.tensor([[[1.0, -3.0], [0.0, 4.0]]])
+        scores = joint_move_scores(source, destination)
+        self.assertEqual(scores[0, 0, 0].item(), 3.0)
+        self.assertEqual(scores[0, 1, 1].item(), 4.0)
+
+    def test_color_rotation_preserves_legal_move_and_value(self):
+        board = "".join(initial_board())
+        source, destination = parse_move("h7-e7")
+        record = {"board": board, "side": RED, "source": source, "destination": destination, "result": "1-0"}
+        dataset = PositionDataset([record], mirror_augmentation=False, color_rotation=True)
+        with patch("torch.rand", return_value=torch.tensor(0.0)):
+            _, rotated_source, rotated_destination, value, rotated_board, rotated_side = dataset[0]
+        self.assertEqual(rotated_side, BLACK)
+        self.assertEqual(value, 1.0)
+        self.assertIn(
+            (rotated_source, rotated_destination),
+            {(move.src, move.dst) for move in legal_moves(list(rotated_board), rotated_side)},
+        )
 
 
 class GameUpgradeTests(unittest.TestCase):

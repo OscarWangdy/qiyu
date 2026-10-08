@@ -12,7 +12,7 @@ from typing import Dict, List, Tuple
 import torch
 
 from .encoding import TOKEN_TO_ID, encode_board
-from .model import joint_move_log_probs, load_checkpoint
+from .model import joint_move_scores, load_checkpoint
 from .retrain import read_jsonl
 from .rules import board_from_string, legal_moves
 
@@ -22,31 +22,35 @@ def run_policy(model, records: List[Dict], device: torch.device, remove_side: bo
     legal_top1 = legal_top3 = raw_legal = 0
     reciprocal_rank = 0.0
     latencies: List[float] = []
-    for record in records:
-        board = board_from_string(record["board"])
-        inputs = encode_board(board, record["side"]).unsqueeze(0).to(device)
+    for start_index in range(0, len(records), 64):
+        batch = records[start_index : start_index + 64]
+        boards = [board_from_string(record["board"]) for record in batch]
+        inputs = torch.stack(
+            [encode_board(board, record["side"]) for board, record in zip(boards, batch)]
+        ).to(device)
         if remove_side:
-            inputs[0, 0] = TOKEN_TO_ID["<RED>"]
+            inputs[:, 0] = TOKEN_TO_ID["<RED>"]
         started = time.perf_counter()
         source_logits, destination_logits, _, _ = model(inputs)
-        joint = joint_move_log_probs(source_logits, destination_logits)
+        joint = joint_move_scores(source_logits, destination_logits).cpu()
         if device.type == "mps":
             torch.mps.synchronize()
-        latencies.append((time.perf_counter() - started) * 1000)
-        raw_source, raw_destination = divmod(int(joint[0].reshape(-1).argmax().item()), 90)
-        legal = legal_moves(board, record["side"])
-        legal_pairs = {(move.src, move.dst) for move in legal}
-        raw_legal += int((raw_source, raw_destination) in legal_pairs)
-        ranked = sorted(
-            ((float(joint[0, move.src, move.dst].item()), move.src, move.dst) for move in legal),
-            reverse=True,
-        )
-        target = (record["source"], record["destination"])
-        ranked_pairs = [item[1:] for item in ranked]
-        legal_top1 += int(ranked_pairs[0] == target)
-        legal_top3 += int(target in ranked_pairs[:3])
-        if target in ranked_pairs:
-            reciprocal_rank += 1 / (ranked_pairs.index(target) + 1)
+        latencies.extend([(time.perf_counter() - started) * 1000 / len(batch)] * len(batch))
+        for index, (record, board) in enumerate(zip(batch, boards)):
+            raw_source, raw_destination = divmod(int(joint[index].reshape(-1).argmax().item()), 90)
+            legal = legal_moves(board, record["side"])
+            legal_pairs = {(move.src, move.dst) for move in legal}
+            raw_legal += int((raw_source, raw_destination) in legal_pairs)
+            ranked = sorted(
+                ((float(joint[index, move.src, move.dst].item()), move.src, move.dst) for move in legal),
+                reverse=True,
+            )
+            target = (record["source"], record["destination"])
+            ranked_pairs = [item[1:] for item in ranked]
+            legal_top1 += int(ranked_pairs[0] == target)
+            legal_top3 += int(target in ranked_pairs[:3])
+            if target in ranked_pairs:
+                reciprocal_rank += 1 / (ranked_pairs.index(target) + 1)
     count = len(records)
     return {
         "legal_top1_accuracy": legal_top1 / max(count, 1),
@@ -81,7 +85,7 @@ def make_svg(metrics_csv: Path, output: Path) -> None:
         grid.append(f'<text x="{margin-10}" y="{y+4:.1f}" text-anchor="end" font-size="12">{label:.1f}</text>')
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
 <rect width="{width}" height="{height}" fill="#fffaf0"/>
-<text x="{margin}" y="30" font-family="sans-serif" font-size="19" font-weight="bold" fill="#173f35">棋语 v3 续训曲线</text>
+<text x="{margin}" y="30" font-family="sans-serif" font-size="19" font-weight="bold" fill="#173f35">棋语续训曲线</text>
 {''.join(grid)}
 <polyline points="{polyline(train)}" fill="none" stroke="#a83b2f" stroke-width="3"/>
 <polyline points="{polyline(validation)}" fill="none" stroke="#173f35" stroke-width="3"/>

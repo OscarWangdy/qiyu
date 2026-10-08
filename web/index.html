@@ -47,6 +47,16 @@
     .chat-form button { margin:0; }
     .quick-questions { display:flex; gap:6px; flex-wrap:wrap; margin-top:7px; }
     .quick-questions button { padding:6px 9px; margin:0; background:#e5d6bb; color:#3f3a32; font-size:12px; }
+    .connection { display:flex; align-items:center; justify-content:space-between; gap:10px; font:13px/1.5 system-ui; }
+    .connection strong { color:var(--jade); }
+    .setup-row,.vision-actions { display:flex; gap:8px; align-items:stretch; margin-top:10px; }
+    .setup-row input,select { width:100%; border:1px solid #c9b893; border-radius:4px; background:#fffdf7; color:var(--ink); padding:10px 11px; font:14px/1.5 system-ui; }
+    .setup-row button,.vision-actions button { flex:0 0 auto; margin:0; }
+    .fine-print { margin-top:8px; color:#697169; font:11px/1.55 system-ui; }
+    .vision-picker { display:block; margin-top:8px; padding:10px; border:1px dashed #b99d6d; border-radius:5px; background:#fffdf7; font:13px system-ui; }
+    #imagePreview { width:100%; max-height:240px; object-fit:contain; display:none; margin-top:10px; border-radius:5px; background:#1d241f0d; }
+    .vision-result { display:none; margin-top:10px; padding:11px; border-left:3px solid var(--gold); background:#fffdf7; white-space:pre-wrap; font:12px/1.7 system-ui; overflow-wrap:anywhere; }
+    .side-select { max-width:125px; }
     #toast { min-height:20px; color:var(--red); font:13px system-ui; transition:color .18s ease; }
     #toast.thinking { color:var(--jade); }
     @media (max-width:900px) { main { grid-template-columns:1fr; } header { align-items:start; flex-direction:column; } }
@@ -80,10 +90,22 @@
         <button id="reset" class="secondary">重置棋局</button>
       </section>
       <section class="card">
-        <h2>棋语助教·新手可随时问</h2>
+        <h2>DeepSeek 连接</h2>
+        <div class="connection"><span id="deepseekStatus">正在检查…</span><strong id="deepseekModel"></strong></div>
+        <div id="apiSetup">
+          <div class="setup-row">
+            <input id="apiKey" type="password" autocomplete="off" placeholder="粘贴 DeepSeek API Key">
+            <button id="saveApiKey">本机保存</button>
+          </div>
+          <div class="fine-print">Key 仅写入本项目已忽略的 <code>.env</code>，页面不会回显。未配置时，对话自动回退到本地规则助教。</div>
+        </div>
+        <div id="remoteSetupHint" class="fine-print" style="display:none">公网部署请在服务器环境变量中配置 <code>DEEPSEEK_API_KEY</code>，不在网页中传输 Key。</div>
+      </section>
+      <section class="card">
+        <h2>棋语助教·可自由对话</h2>
         <div id="chatLog" class="chat-log" aria-live="polite"></div>
         <form id="chatForm" class="chat-form">
-          <input id="chatInput" maxlength="200" autocomplete="off" placeholder="例如：这步怎么走？" aria-label="向棋语助教提问">
+          <input id="chatInput" maxlength="4000" autocomplete="off" placeholder="例如：这步怎么走？" aria-label="向棋语助教提问">
           <button type="submit">发送</button>
         </form>
         <div class="quick-questions">
@@ -91,6 +113,20 @@
           <button type="button" data-question="为什么这样走？">解释原因</button>
           <button type="button" data-question="注意力热图怎么看？">怎么看热图</button>
         </div>
+      </section>
+      <section class="card">
+        <h2>上传并识别残局</h2>
+        <label class="vision-picker">选择棋盘截图或照片
+          <input id="positionImage" type="file" accept="image/jpeg,image/png,image/gif,image/webp">
+        </label>
+        <img id="imagePreview" alt="待识别的残局图片">
+        <div class="vision-actions">
+          <button id="recognizeImage" disabled>识别残局</button>
+          <select id="recognizedSide" class="side-select" aria-label="行棋方"><option value="red">红方行棋</option><option value="black">黑方行棋</option></select>
+          <button id="applyPosition" class="secondary" disabled>应用到棋盘</button>
+        </div>
+        <div id="visionResult" class="vision-result"></div>
+        <div class="fine-print">识别结果不会自动覆盖棋盘。请先阅读疑点，应用时后端仍会检查双方将帅和棋子数量。</div>
       </section>
       <section class="card">
         <h2>决策解释</h2>
@@ -118,6 +154,9 @@
     const chatInput = document.getElementById('chatInput');
     const chatLog = document.getElementById('chatLog');
     const sideButtons = [...document.querySelectorAll('[data-side]')];
+    const imageInput = document.getElementById('positionImage');
+    const recognizeButton = document.getElementById('recognizeImage');
+    const applyPositionButton = document.getElementById('applyPosition');
     const W=720,H=800,pad=40,cw=(W-pad*2)/8,ch=(H-pad*2)/9;
     const glyph={r:'車',h:'馬',e:'象',a:'士',k:'將',c:'砲',p:'卒',R:'車',H:'馬',E:'相',A:'仕',K:'帥',C:'炮',P:'兵'};
     const timing={humanMove:350,aiThinkMin:500,aiPreview:350,aiMove:850,settle:250};
@@ -126,6 +165,7 @@
     const motionPreference=window.matchMedia('(prefers-reduced-motion: reduce)');
     let reduceMotion=motionPreference.matches;
     let state=null,displayBoard=null,selected=null,busy=false,lastMoveVisual=null,activeVisual=null;
+    let currentImageData='',recognizedFen='',deepseekReady=false;
     const visualIndex=i=>state&&state.human_side==='black'?89-i:i;
     const boardIndex=(r,c)=>state&&state.human_side==='black'?89-(r*9+c):r*9+c;
     const xy=i=>{const visual=visualIndex(i);return {r:Math.floor(visual/9),c:visual%9,x:pad+(visual%9)*cw,y:pad+Math.floor(visual/9)*ch};};
@@ -320,18 +360,23 @@
       renderPanels(nextState);
     }
 
-    async function api(path,body={}){
-      const isState=path==='/api/state';
-      const response=await fetch(path,{method:isState?'GET':'POST',headers:{'Content-Type':'application/json','X-Qiyu-Session':sessionId},body:isState?undefined:JSON.stringify(body)});
+    async function apiRequest(path,body=null){
+      const method=body===null?'GET':'POST';
+      const response=await fetch(path,{method,headers:{'Content-Type':'application/json','X-Qiyu-Session':sessionId},body:body===null?undefined:JSON.stringify(body)});
       const data=await response.json();
       if(!response.ok)throw new Error(data.error||'请求失败');
+      return data;
+    }
+
+    async function api(path,body=null){
+      const data=await apiRequest(path,body);
       if(!data.state)throw new Error('服务器返回了无效状态');
       return data;
     }
 
     async function requestAndAnimateAgent(){
       setToast('智能体正在分析当前局面…',true);statusElement.textContent='AI 正在思考…';
-      const [payload]=await Promise.all([api('/api/agent-move'),wait(timing.aiThinkMin)]);
+      const [payload]=await Promise.all([api('/api/agent-move',{}),wait(timing.aiThinkMin)]);
       if(!payload.transition){applyState(payload.state);return;}
       state=payload.state;renderPanels(state);
       statusElement.textContent=`AI 将移动：${payload.transition.description}`;setToast('请看棋盘上的起点提示。',true);
@@ -414,8 +459,76 @@
       finally{setBusy(false);draw();}
     };
 
+    function renderDeepseekStatus(info){
+      deepseekReady=Boolean(info&&info.configured);
+      document.getElementById('deepseekStatus').textContent=deepseekReady?'已连接，自由对话与视觉可用':'未配置，对话使用本地助教';
+      document.getElementById('deepseekModel').textContent=info?info.text_model:'';
+      document.getElementById('apiSetup').style.display=!deepseekReady&&info&&info.local_setup?'block':'none';
+      document.getElementById('remoteSetupHint').style.display=!deepseekReady&&info&&!info.local_setup?'block':'none';
+      recognizeButton.disabled=!deepseekReady||!currentImageData;
+    }
+
+    async function refreshHealth(){
+      const health=await apiRequest('/api/health');
+      renderDeepseekStatus(health.deepseek||{});
+    }
+
+    document.getElementById('saveApiKey').onclick=async()=>{
+      const field=document.getElementById('apiKey'),apiKey=field.value.trim();
+      if(!apiKey){setToast('请先粘贴 DeepSeek API Key。');return;}
+      const button=document.getElementById('saveApiKey');button.disabled=true;setToast('正在保存本机配置…',true);
+      try{
+        const result=await apiRequest('/api/settings/deepseek',{api_key:apiKey});
+        field.value='';renderDeepseekStatus(result.deepseek);setToast('DeepSeek 已连接。可以自由对话或识别残局图片。');
+      }catch(error){setToast(error.message);}
+      finally{button.disabled=false;}
+    };
+
+    imageInput.addEventListener('change',()=>{
+      const file=imageInput.files&&imageInput.files[0];
+      currentImageData='';recognizedFen='';applyPositionButton.disabled=true;
+      const result=document.getElementById('visionResult');result.style.display='none';result.textContent='';
+      if(!file)return;
+      if(file.size>8*1024*1024){setToast('图片不能超过 8 MiB。');imageInput.value='';return;}
+      const reader=new FileReader();
+      reader.onload=()=>{
+        currentImageData=String(reader.result||'');
+        const preview=document.getElementById('imagePreview');preview.src=currentImageData;preview.style.display='block';
+        recognizeButton.disabled=!deepseekReady;setToast(deepseekReady?'':'识别图片前请先配置 DeepSeek API Key。');
+      };
+      reader.onerror=()=>setToast('无法读取这张图片。');
+      reader.readAsDataURL(file);
+    });
+
+    recognizeButton.onclick=async()=>{
+      if(!currentImageData||!deepseekReady)return;
+      recognizeButton.disabled=true;applyPositionButton.disabled=true;setToast('DeepSeek 正在识别棋子与朝向…',true);
+      try{
+        const value=await apiRequest('/api/vision',{image:currentImageData});
+        recognizedFen=value.fen;document.getElementById('recognizedSide').value=value.side;
+        const result=document.getElementById('visionResult');
+        const notes=value.notes&&value.notes.length?`\n需核对：${value.notes.join('；')}`:'\n未标记额外疑点。';
+        result.textContent=`识别置信度：${Math.round(value.confidence*100)}%\n方向：${value.orientation}\nFEN：${value.fen}${notes}`;
+        result.style.display='block';applyPositionButton.disabled=false;setToast('识别完成。请先阅读疑点，再应用到棋盘。');
+      }catch(error){setToast(error.message);}
+      finally{recognizeButton.disabled=!deepseekReady||!currentImageData;}
+    };
+
+    applyPositionButton.onclick=async()=>{
+      if(!recognizedFen||busy)return;
+      setBusy(true);applyPositionButton.disabled=true;setToast('正在校验并导入残局…',true);
+      try{
+        const payload=await api('/api/position',{fen:recognizedFen,side:document.getElementById('recognizedSide').value});
+        applyState(payload.state,{showLastMove:false});setToast('残局已导入。请对照原图核对每枚棋子。');
+      }catch(error){setToast(error.message);applyPositionButton.disabled=false;}
+      finally{setBusy(false);draw();}
+    };
+
     setBusy(true);
-    api('/api/state').then(payload=>{applyState(payload.state);setToast('');}).catch(error=>setToast(error.message)).finally(()=>setBusy(false));
+    Promise.all([api('/api/state'),refreshHealth()])
+      .then(([payload])=>{applyState(payload.state);setToast('');})
+      .catch(error=>setToast(error.message))
+      .finally(()=>setBusy(false));
   </script>
 </body>
 </html>

@@ -1,0 +1,31 @@
+{
+  "evaluation_records": 6780,
+  "parameters": 300241,
+  "checkpoint_continuation_epoch": 17,
+  "full_model_with_rule_filter": {
+    "legal_top1_accuracy": 0.3101769911504425,
+    "legal_top3_accuracy": 0.4929203539823009,
+    "legal_mrr": 0.44778195795197484,
+    "raw_action_legality": 0.0359882005899705,
+    "mean_model_latency_ms": 1.9442456103398702
+  },
+  "unseen_position_records": 5054,
+  "unseen_position_metrics": {
+    "legal_top1_accuracy": 0.23189552829442026,
+    "legal_top3_accuracy": 0.406806489908983,
+    "legal_mrr": 0.3718976138380942,
+    "raw_action_legality": 0.002374356944994064,
+    "mean_model_latency_ms": 1.478480544012606
+  },
+  "corrupted_side_token_ablation": {
+    "legal_top1_accuracy": 0.307669616519174,
+    "legal_top3_accuracy": 0.4882005899705015,
+    "legal_mrr": 0.44434691617396,
+    "raw_action_legality": 0.0420353982300885,
+    "mean_model_latency_ms": 1.4785576830130218
+  },
+  "rule_filter_effect": {
+    "before_filter_legal_rate": 0.0359882005899705,
+    "after_filter_legal_rate": 1.0
+  }
+}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -13,6 +14,15 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from .agent import QiYuAgent
+from .deepseek import (
+    DeepSeekClient,
+    DeepSeekConfig,
+    DeepSeekError,
+    compact_board_context,
+    load_env_file,
+    parse_data_url,
+    parse_xiangqi_fen,
+)
 from .rules import (
     BLACK,
     RED,
@@ -30,15 +40,26 @@ from .rules import (
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
 MASTER_CHECKPOINT = ROOT / "artifacts" / "training_master" / "best_model.pt"
+V5_CHECKPOINT = ROOT / "artifacts" / "training_v5" / "best_model.pt"
 V4_CHECKPOINT = ROOT / "artifacts" / "training_v4" / "best_model.pt"
 V3_CHECKPOINT = ROOT / "artifacts" / "training_v3_long" / "best_model.pt"
 DEFAULT_CHECKPOINT = next(
-    (path for path in (V4_CHECKPOINT, V3_CHECKPOINT, MASTER_CHECKPOINT) if path.exists()),
+    (path for path in (V5_CHECKPOINT, V4_CHECKPOINT, V3_CHECKPOINT, MASTER_CHECKPOINT) if path.exists()),
     ROOT / "artifacts" / "training" / "best_model.pt",
 )
 V3_OPENING_BOOK = ROOT / "artifacts" / "master_data_v3" / "opening_book.json"
 MASTER_OPENING_BOOK = ROOT / "artifacts" / "master_data" / "opening_book.json"
 DEFAULT_OPENING_BOOK = V3_OPENING_BOOK if V3_OPENING_BOOK.exists() else MASTER_OPENING_BOOK
+ENV_FILE = ROOT / ".env"
+MAX_REQUEST_BYTES = 12 * 1024 * 1024
+
+
+CHAT_SYSTEM_PROMPT = """你是「棋语」，一位友好、自然、懂中国象棋的中文 AI 伙伴。
+你可以和用户自由对话，也可以讲解当前棋局。回答要自然、清楚，默认简洁。
+涉及当前棋局时，以每轮附带的「可核验局面数据」为唯一事实来源。
+推荐走法必须在 legal_moves 中，面向用户优先使用「炮二平五」这类中国象棋记谱。
+不确定时明说不确定，不编造棋子位置、局势或历史事实。
+棋力决策和合法性由本地规则/搜索模块负责，你负责理解意图与语言表达。"""
 
 
 class Game:
@@ -53,6 +74,7 @@ class Game:
         self.board = initial_board()
         self.side = RED
         self.human_side = human_side
+        self.language_lock = getattr(self, "language_lock", threading.Lock())
         self.history = []
         self.chat_history = [
             {
@@ -67,6 +89,14 @@ class Game:
         self.last_candidates = []
         self.last_search = {}
         self.last_explanation = "红方先行。点击一个红方棋子，再点击目标位置。"
+
+    def _clear_decision_state(self, explanation: str) -> None:
+        self.last_move = None
+        self.last_engine = "waiting-for-player"
+        self.last_attention = [0.0] * 90
+        self.last_candidates = []
+        self.last_search = {}
+        self.last_explanation = explanation
 
     def _state_unlocked(self) -> Dict:
         end = winner(self.board, self.side)
@@ -173,7 +203,7 @@ class Game:
             transition = self._agent_step() if self.human_side == BLACK else None
             return {"state": self._state_unlocked(), "transition": transition}
 
-    def chat(self, question: str) -> Dict:
+    def _local_chat(self, question: str) -> Dict:
         """回答与当前棋局相关的新手问题，并为提示生成可验证的合法着。"""
         with self.lock:
             question = " ".join(question.strip().split())
@@ -240,13 +270,114 @@ class Game:
             self.chat_history = self.chat_history[-50:]
             return {"state": self._state_unlocked(), "transition": None, "reply": reply}
 
+    def chat(self, question: str, client: Optional[DeepSeekClient] = None) -> Dict:
+        """DeepSeek 已配置时自由对话，否则保留可离线运行的规则助教。"""
+        if client is None:
+            return self._local_chat(question)
+        cleaned = " ".join(question.strip().split())
+        if not cleaned:
+            raise ValueError("请先输入问题")
+        if len(cleaned) > 4000:
+            raise ValueError("单条消息不能超过 4000 个字符")
+        with self.language_lock:
+            with self.lock:
+                board = self.board[:]
+                side = self.side
+                legal = [
+                    f"{move.key}（{move_notation(board, move)}）"
+                    for move in legal_moves(board, side)
+                ]
+                history = self.chat_history[-16:]
+                decision_hint = self.last_explanation
+            context = compact_board_context(board, side, legal)
+            messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}, *history]
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"【可核验局面数据】{context}\n"
+                    f"【本地决策摘要】{decision_hint}\n"
+                    f"【用户消息】{cleaned}"
+                ),
+            })
+            result = client.chat(messages)
+            with self.lock:
+                self.chat_history.extend([
+                    {"role": "user", "content": cleaned},
+                    {"role": "assistant", "content": result["content"]},
+                ])
+                self.chat_history = self.chat_history[-50:]
+                state = self._state_unlocked()
+            return {
+                "state": state,
+                "transition": None,
+                "reply": result["content"],
+                "model": result["model"],
+                "usage": result.get("usage", {}),
+            }
+
+    def recognize_position(self, data_url: str, client: DeepSeekClient) -> Dict:
+        image_bytes, mime_type = parse_data_url(data_url)
+        with self.language_lock:
+            return client.recognize_position(image_bytes, mime_type)
+
+    def load_position(self, fen: str, side_override: Optional[str] = None) -> Dict:
+        board, fen_side = parse_xiangqi_fen(fen)
+        side = side_override if side_override in {RED, BLACK} else fen_side
+        if side not in {RED, BLACK}:
+            raise ValueError("请指定当前行棋方")
+        with self.lock:
+            self.board = board
+            self.side = side
+            self.human_side = side
+            self.history = []
+            self.revision += 1
+            self.chat_history.append({
+                "role": "assistant",
+                "content": "已导入图片中的残局。请先对照原图核对棋子，再问我局势或下一步。",
+            })
+            self.chat_history = self.chat_history[-50:]
+            self._clear_decision_state("已导入并通过基础规则校验的残局。请先核对棋子位置，再继续分析或行棋。")
+            return {"state": self._state_unlocked(), "transition": None}
+
 
 AGENT: Optional[QiYuAgent] = None
+DEEPSEEK: Optional[DeepSeekClient] = None
 GAMES: Dict[str, tuple[Game, float]] = {}
 GAMES_LOCK = threading.Lock()
 SESSION_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 SESSION_TTL_SECONDS = 6 * 60 * 60
 MAX_SESSIONS = 256
+
+
+def deepseek_status() -> Dict:
+    if DEEPSEEK is None:
+        return {
+            "configured": False,
+            "provider": "DeepSeek",
+            "text_model": os.environ.get("DEEPSEEK_TEXT_MODEL", "deepseek-flash"),
+            "vision_model": os.environ.get("DEEPSEEK_VISION_MODEL", "deepseek-flash"),
+        }
+    return DEEPSEEK.status
+
+
+def save_local_api_key(api_key: str) -> None:
+    cleaned = api_key.strip()
+    if not 20 <= len(cleaned) <= 512 or any(character.isspace() for character in cleaned):
+        raise ValueError("API Key 格式无效")
+    existing = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
+    kept = [line for line in existing if not line.strip().startswith("DEEPSEEK_API_KEY=")]
+    kept.append(f"DEEPSEEK_API_KEY={cleaned}")
+    temporary = ENV_FILE.with_name(".env.tmp")
+    temporary.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    temporary.replace(ENV_FILE)
+    os.environ["DEEPSEEK_API_KEY"] = cleaned
+
+
+def require_deepseek() -> DeepSeekClient:
+    if DEEPSEEK is None:
+        raise ValueError("图片识别需要 DeepSeek API Key。请先在页面的「DeepSeek 连接」中完成设置。")
+    return DEEPSEEK
 
 
 def game_for_session(session_id: str) -> Game:
@@ -284,6 +415,12 @@ class Handler(SimpleHTTPRequestHandler):
     def _game(self) -> Game:
         return game_for_session(self.headers.get("X-Qiyu-Session", ""))
 
+    def _is_local_request(self) -> bool:
+        try:
+            return ipaddress.ip_address(self.client_address[0]).is_loopback
+        except ValueError:
+            return False
+
     def do_GET(self):
         if self.path == "/api/health":
             metrics = getattr(AGENT, "metadata", {}).get("metrics", {}) if AGENT else {}
@@ -291,8 +428,15 @@ class Handler(SimpleHTTPRequestHandler):
                 {
                     "ok": True,
                     "model_ready": bool(AGENT and AGENT.ready),
-                    "model": "qiyu-v3-retrained" if metrics.get("continuation_epoch") else "qiyu-v3",
+                    "model": (
+                        "qiyu-v5" if getattr(AGENT, "metadata", {}).get("environment", {}).get("color_rotation")
+                        else "qiyu-v3-retrained" if metrics.get("continuation_epoch") else "qiyu-v3"
+                    ),
                     "continuation_epoch": metrics.get("continuation_epoch"),
+                    "deepseek": {
+                        **deepseek_status(),
+                        "local_setup": self._is_local_request(),
+                    },
                 }
             )
             return
@@ -302,9 +446,22 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
+        global DEEPSEEK
         try:
             length = int(self.headers.get("Content-Length", "0"))
+            if length > MAX_REQUEST_BYTES:
+                self._json({"error": "请求体不能超过 12 MiB"}, 413)
+                return
             payload = json.loads(self.rfile.read(length) or b"{}")
+            if self.path == "/api/settings/deepseek":
+                if not self._is_local_request():
+                    self._json({"error": "为保护 API Key，只能在本机保存配置"}, 403)
+                    return
+                save_local_api_key(str(payload.get("api_key", "")))
+                config = DeepSeekConfig.from_env()
+                DEEPSEEK = DeepSeekClient(config) if config else None
+                self._json({"ok": True, "deepseek": {**deepseek_status(), "local_setup": True}})
+                return
             game = self._game()
             if self.path == "/api/reset":
                 self._json(game.reset_response(payload.get("human_side")))
@@ -313,28 +470,38 @@ class Handler(SimpleHTTPRequestHandler):
             elif self.path == "/api/agent-move":
                 self._json(game.agent_step())
             elif self.path == "/api/chat":
-                self._json(game.chat(str(payload.get("question", ""))))
+                self._json(game.chat(str(payload.get("question", "")), DEEPSEEK))
+            elif self.path == "/api/vision":
+                self._json(game.recognize_position(str(payload.get("image", "")), require_deepseek()))
+            elif self.path == "/api/position":
+                self._json(game.load_position(str(payload.get("fen", "")), payload.get("side")))
             else:
                 self._json({"error": "未知接口"}, 404)
         except (ValueError, KeyError, json.JSONDecodeError) as error:
             self._json({"error": str(error)}, 400)
+        except DeepSeekError as error:
+            self._json({"error": str(error)}, 502)
 
     def log_message(self, format, *args):
         print("[web] " + format % args)
 
 
 def main() -> None:
-    global AGENT
+    global AGENT, DEEPSEEK
     parser = argparse.ArgumentParser(description="启动棋语智能体演示")
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--opening-book", type=Path, default=DEFAULT_OPENING_BOOK)
     parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8765")))
     args = parser.parse_args()
+    load_env_file(ENV_FILE)
     AGENT = QiYuAgent(args.checkpoint, args.opening_book)
+    deepseek_config = DeepSeekConfig.from_env()
+    DEEPSEEK = DeepSeekClient(deepseek_config) if deepseek_config else None
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"棋语演示已启动：http://{args.host}:{args.port}")
     print(f"模型：{'已加载' if AGENT.ready else '未找到权重，使用教师策略'}")
+    print(f"DeepSeek：{deepseek_status()['text_model'] if DEEPSEEK else '尚未配置 API Key（对话回退本地助教）'}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

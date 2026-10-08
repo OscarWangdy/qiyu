@@ -1,0 +1,33 @@
+{
+  "version": "qiyu-v5",
+  "training": {
+    "status": "completed",
+    "continuation_epochs": 12,
+    "best_legal_top1_accuracy": 0.32842896844858593,
+    "total_seconds": 1340.69
+  },
+  "frozen_test": {
+    "records": 6780,
+    "v4_top1": 0.3101769911504425,
+    "v5_top1": 0.3088495575221239,
+    "v4_unseen_top1": 0.23189552829442026,
+    "v5_unseen_top1": 0.2332805698456668
+  },
+  "arena": {
+    "games": 20,
+    "new_wins": 4,
+    "old_wins": 1,
+    "draws_or_capped": 15,
+    "mean_material_for_new": 3.21
+  },
+  "sha256": {
+    "artifacts/training_v4/best_model.pt": "850a0cb50723f461267c374d4107eac364c5a45e308d3e5975599dcd98f532ab",
+    "artifacts/training_v5/best_model.pt": "f28f56a2e4beab6e8b5bc4b2377929e41dce88d1dd08ea61a697fe1b8f1e5a36",
+    "artifacts/training_v5/latest_model.pt": "a3a06254444d5e5f0694ce58125471296ed23fe6897b378bdc4f9498c1ba3278",
+    "artifacts/training_v5/metrics.csv": "1d4bea8b1ab8565d6eae7030a3a16c803cf213336f07be304be6bb5484ccf276",
+    "artifacts/training_v5/environment.json": "dda1c59cce937c5dd1aab746d57b433df8b0d1aacb4f828e594e0868f6ce68d0",
+    "artifacts/evaluation_v4_consistent/evaluation.json": "2a29086c0523b5127e6de940f1021c44823eacf6b7e76a91316079bb886076c0",
+    "artifacts/evaluation_v5/evaluation.json": "df9032e8925a2c619694c313bdb0b6c67aee7c7d23eef511f6784ec07b3a36f4",
+    "artifacts/arena_v5_vs_v4_extended.json": "ac56331cb5e5db882949ef65714d0e26a42958c7c63d07dbf86e51daa88ff260"
+  }
+}

@@ -1,4 +1,4 @@
-"""在现有 v3 checkpoint 上续训，于当前局面的合法着集合内优化联合策略。"""
+"""从现有权重续训，在当前局面的合法着集合内优化联合策略。"""
 
 from __future__ import annotations
 
@@ -53,9 +53,10 @@ def legal_pairs(board_text: str, side: str) -> torch.Tensor:
 
 
 class PositionDataset(Dataset):
-    def __init__(self, records: Sequence[Dict], mirror_augmentation: bool):
+    def __init__(self, records: Sequence[Dict], mirror_augmentation: bool, color_rotation: bool = False):
         self.records = records
         self.mirror_augmentation = mirror_augmentation
+        self.color_rotation = color_rotation
 
     def __len__(self) -> int:
         return len(self.records)
@@ -64,6 +65,18 @@ class PositionDataset(Dataset):
         record = self.records[index]
         board = board_from_string(record["board"])
         source, destination = int(record["source"]), int(record["destination"])
+        side = record["side"]
+        result = record.get("result", "*")
+        if result == "1-0":
+            value = 1.0 if side == "red" else -1.0
+        elif result == "0-1":
+            value = 1.0 if side == "black" else -1.0
+        else:
+            value = 0.0
+        if self.color_rotation and torch.rand(()) < 0.5:
+            board = [piece.swapcase() for piece in reversed(board)]
+            source, destination = 89 - source, 89 - destination
+            side = "black" if side == "red" else "red"
         if self.mirror_augmentation and torch.rand(()) < 0.5:
             mirrored = ["."] * 90
             for position, piece in enumerate(board):
@@ -74,21 +87,14 @@ class PositionDataset(Dataset):
             destination_row, destination_column = divmod(destination, 9)
             source = source_row * 9 + (8 - source_column)
             destination = destination_row * 9 + (8 - destination_column)
-        result = record.get("result", "*")
-        if result == "1-0":
-            value = 1.0 if record["side"] == "red" else -1.0
-        elif result == "0-1":
-            value = 1.0 if record["side"] == "black" else -1.0
-        else:
-            value = 0.0
         board_text = board_to_string(board)
         return (
-            encode_board(board, record["side"]),
+            encode_board(board, side),
             source,
             destination,
             value,
             board_text,
-            record["side"],
+            side,
         )
 
 
@@ -145,7 +151,7 @@ def evaluate(model: QiYuTransformer, loader: DataLoader, device: torch.device) -
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="在棋语 v3 基础上进行多轮续训")
+    parser = argparse.ArgumentParser(description="从现有棋语权重进行多轮续训")
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, default=Path("artifacts/training_v3_long/best_model.pt"))
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/training_v4"))
@@ -155,6 +161,7 @@ def main() -> None:
     parser.add_argument("--minimum-learning-rate", type=float, default=1e-5)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=20260921)
+    parser.add_argument("--color-rotation", action="store_true", help="随机旋转棋盘 180 度并交换红黑棋子")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -170,7 +177,7 @@ def main() -> None:
     validation_records = read_jsonl(validation_path)
     generator = torch.Generator().manual_seed(args.seed)
     train_loader = DataLoader(
-        PositionDataset(train_records, mirror_augmentation=True),
+        PositionDataset(train_records, mirror_augmentation=True, color_rotation=args.color_rotation),
         batch_size=args.batch_size,
         shuffle=True,
         generator=generator,
@@ -192,9 +199,13 @@ def main() -> None:
         "validation_records": len(validation_records),
         "policy_loss": "sparse_legal_masked_joint",
         "mirror_augmentation": True,
+        "color_rotation": args.color_rotation,
         "continuation_epochs": args.epochs,
         "base_checkpoint": str(args.checkpoint),
-        "base_checkpoint_epoch": base_metadata.get("metrics", {}).get("epoch"),
+        "base_checkpoint_epoch": (
+            base_metadata.get("metrics", {}).get("continuation_epoch")
+            or base_metadata.get("metrics", {}).get("epoch")
+        ),
         "data_hashes": {"train": sha256(train_path), "validation": sha256(validation_path)},
     }
     (args.output_dir / "environment.json").write_text(

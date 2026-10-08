@@ -166,9 +166,13 @@ class QiYuTransformer(nn.Module):
         return sum(parameter.numel() for parameter in self.parameters())
 
 
-def joint_move_log_probs(source_logits: torch.Tensor, destination_logits: torch.Tensor) -> torch.Tensor:
-    """返回与分解交叉熵严格一致的 log p(source, destination)。"""
-    return F.log_softmax(source_logits, dim=-1).unsqueeze(-1) + F.log_softmax(destination_logits, dim=-1)
+def joint_move_scores(source_logits: torch.Tensor, destination_logits: torch.Tensor) -> torch.Tensor:
+    """返回与合法着联合训练目标一致的动作分数。
+
+    合法着训练使用 source + destination 的未归一化分数；在每个来源格
+    单独归一化目标格会改变跨来源格的排序。
+    """
+    return source_logits.unsqueeze(-1) + destination_logits
 
 
 def save_checkpoint(path: str, model: QiYuTransformer, extra: Optional[Dict] = None) -> None:
