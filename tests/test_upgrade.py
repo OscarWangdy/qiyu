@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 import json
+import os
 import threading
 from http.server import ThreadingHTTPServer
 from urllib.request import Request, urlopen
@@ -143,6 +144,11 @@ class HttpUpgradeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["model_ready"])
         self.assertEqual(result["model"], "qiyu-v3")
+
+    def test_render_disables_local_key_setup(self):
+        with patch.dict(os.environ, {"RENDER": "true"}):
+            result = self.request("/api/health")
+        self.assertFalse(result["deepseek"]["local_setup"])
 
     def test_reset_endpoint_accepts_black(self):
         result = self.request("/api/reset", {"human_side": BLACK})

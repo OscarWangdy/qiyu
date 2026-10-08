@@ -416,6 +416,11 @@ class Handler(SimpleHTTPRequestHandler):
         return game_for_session(self.headers.get("X-Qiyu-Session", ""))
 
     def _is_local_request(self) -> bool:
+        # Render terminates TLS in a local reverse proxy, so the socket peer can
+        # look like 127.0.0.1 even for a public request. Never expose the local
+        # API-key writer on a hosted Render instance.
+        if os.environ.get("RENDER"):
+            return False
         try:
             return ipaddress.ip_address(self.client_address[0]).is_loopback
         except ValueError:
